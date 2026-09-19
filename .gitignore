@@ -1,0 +1,10 @@
+albaranes.db
+archivo/
+entrada/
+config/
+capturas/
+salida*/
+servidor.log
+pila_*.pdf
+nohup.out
+__pycache__/

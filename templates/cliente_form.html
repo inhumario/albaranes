@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block titulo %}{{ c['nombre'] if c else 'Nuevo cliente' }} — Albaranes{% endblock %}
+{% block cuerpo %}
+<h1>{{ c['nombre'] if c else 'Nuevo cliente' }}</h1>
+<form method="post" style="max-width:560px">
+  <label>Nombre</label>
+  <input type="text" name="nombre" value="{{ c['nombre'] if c else '' }}" required>
+
+  <label>Alias de membrete <span class="mini">(separados por comas; cómo aparece en sus albaranes, p.ej. «delaviuda, delaviuda alimentación»)</span></label>
+  <input type="text" name="alias" value="{{ c['alias'] if c else '' }}">
+
+  <label>Canal de entrega</label>
+  <select name="modo_entrega">
+    {% for m in modos %}
+    <option value="{{ m }}" {{ 'selected' if c and c['modo_entrega']==m }}>{{ {'ninguna':'ninguna (solo archivar)','email':'email automático','sftp':'SFTP','portal':'portal web (manual con aviso)'}[m] }}</option>
+    {% endfor %}
+  </select>
+
+  <label style="display:flex;align-items:center;gap:.5rem">
+    <input type="checkbox" name="auto_entrega" style="width:auto" {{ 'checked' if (c and c['auto_entrega']) or not c }}>
+    Entregar automáticamente al procesar (subir y ya; desmarcar solo si este cliente exige revisar antes)
+  </label>
+
+  <label>Email de entrega</label>
+  <input type="text" name="email_para" value="{{ c['email_para'] if c else '' }}" placeholder="albaranes@cliente.com">
+
+  <label>Asunto del email <span class="mini">({fecha} y {numero} se sustituyen)</span></label>
+  <input type="text" name="email_asunto" value="{{ c['email_asunto'] if c else 'Albaranes {fecha}' }}">
+
+  <label>SFTP <span class="mini">(host:usuario:ruta — la clave irá en el gestor de secretos en producción)</span></label>
+  <input type="text" name="sftp_datos" value="{{ c['sftp_datos'] if c else '' }}">
+
+  <label>URL del portal</label>
+  <input type="text" name="portal_url" value="{{ c['portal_url'] if c else '' }}">
+
+  <label>Notas</label>
+  <textarea name="notas" rows="3">{{ c['notas'] if c else '' }}</textarea>
+
+  <p><button class="boton">Guardar</button>
+     <a class="boton suave" href="{{ url_for('clientes') }}">Cancelar</a></p>
+</form>
+{% endblock %}

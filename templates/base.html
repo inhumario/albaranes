@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}Albaranes{% endblock %}</title>
+<style>
+:root{
+  --titulo:#0E4A31; --sub:#1F7A50; --filete:#35996A; --cab:#EAF4EE;
+  --zebra:#F5FAF7; --borde:#C9DED3; --texto:#1F2D26; --fondo:#FBFDFC;
+  --aviso:#8a5a00; --aviso-f:#fdf4e3; --rojo:#8a2020; --rojo-f:#fbecec;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+     color:var(--texto);background:var(--fondo);line-height:1.55}
+header{background:var(--titulo);color:#fff;padding:.7rem 1rem;display:flex;
+       align-items:center;gap:1.2rem;flex-wrap:wrap}
+header .marca{font-weight:700;font-size:1.05rem}
+nav{display:flex;gap:.9rem;flex-wrap:wrap}
+nav a{color:#dcefe4;text-decoration:none;padding:.15rem 0;border-bottom:2px solid transparent}
+nav a.activo,nav a:hover{color:#fff;border-color:var(--filete)}
+main{max-width:1000px;margin:0 auto;padding:1.2rem 16px 3rem}
+h1{color:var(--titulo);font-size:1.45rem;margin:.4rem 0 1rem}
+h2{color:var(--sub);font-size:1.1rem;margin:1.6rem 0 .6rem}
+.aviso{background:var(--cab);border:1px solid var(--borde);border-left:4px solid var(--filete);
+       padding:.55rem .8rem;border-radius:6px;margin-bottom:1rem}
+.tarjetas{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.7rem;margin:1rem 0}
+.tarjeta{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:.7rem .9rem}
+.tarjeta .n{font-size:1.6rem;font-weight:700;color:var(--titulo)}
+.tarjeta .t{font-size:.85rem;color:var(--sub)}
+.tabla-scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;background:#fff;font-size:.92rem}
+th{background:var(--cab);color:var(--titulo);text-align:left;padding:.5rem .6rem;
+   border-bottom:2px solid var(--filete);white-space:nowrap}
+td{padding:.45rem .6rem;border-bottom:1px solid var(--borde)}
+tr:nth-child(even) td{background:var(--zebra)}
+.pill{display:inline-block;padding:.05rem .55rem;border-radius:99px;font-size:.8rem;white-space:nowrap}
+.pill.archivado{background:var(--cab);color:var(--titulo)}
+.pill.entregado{background:var(--filete);color:#fff}
+.pill.pendiente_entrega{background:var(--aviso-f);color:var(--aviso)}
+.pill.revisar,.pill.error{background:var(--rojo-f);color:var(--rojo)}
+.pill.procesando{background:var(--zebra);color:var(--sub)}
+.boton{background:var(--sub);color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;
+       font-size:.92rem;cursor:pointer;text-decoration:none;display:inline-block}
+.boton:hover{background:var(--titulo)}
+.boton.suave{background:var(--cab);color:var(--titulo);border:1px solid var(--borde)}
+form.linea{display:inline}
+input[type=text],input[type=search],select,textarea{
+  width:100%;padding:.45rem .6rem;border:1px solid var(--borde);border-radius:6px;
+  font-size:.95rem;background:#fff;color:var(--texto)}
+label{display:block;margin:.8rem 0 .25rem;color:var(--sub);font-weight:600;font-size:.9rem}
+.subida{border:2px dashed var(--borde);border-radius:10px;background:#fff;
+        padding:1.1rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+a{color:var(--sub)}
+.mini{font-size:.82rem;color:#5a6d63}
+@media (max-width:640px){
+  main{padding:0.8rem 16px 2rem}
+  h1{font-size:1.25rem}
+  th,td{padding:.4rem .45rem;font-size:.85rem}
+}
+</style>
+</head>
+<body>
+<header>
+  <span class="marca">📦 Albaranes</span>
+  <nav>
+    <a href="{{ url_for('index') }}" class="{{ 'activo' if request.endpoint=='index' }}">Panel</a>
+    <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint=='albaranes' }}">Archivo</a>
+    <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint and request.endpoint.startswith('cliente') }}">Clientes</a>
+    <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint=='ajustes' }}">Ajustes</a>
+  </nav>
+  {% if session.get('acceso') %}<a href="{{ url_for('salir') }}" style="margin-left:auto;color:#dcefe4;text-decoration:none;font-size:.85rem">Salir</a>{% endif %}
+</header>
+<main>
+{% with mensajes = get_flashed_messages() %}
+  {% for m in mensajes %}<div class="aviso">{{ m }}</div>{% endfor %}
+{% endwith %}
+{% block cuerpo %}{% endblock %}
+</main>
+</body>
+</html>

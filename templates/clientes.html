@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block titulo %}Clientes — Albaranes{% endblock %}
+{% block cuerpo %}
+<h1>Clientes</h1>
+<p class="mini">Cada cliente tiene sus alias de membrete (para reconocer sus albaranes solos)
+y su canal de entrega. La configuración se aplica automáticamente al procesar un escaneo.</p>
+<p><a class="boton" href="{{ url_for('cliente_form') }}">＋ Nuevo cliente</a></p>
+<div class="tabla-scroll"><table>
+<tr><th>Cliente</th><th>Alias membrete</th><th>Entrega</th><th>Automática</th><th>Albaranes</th><th></th></tr>
+{% for c in filas %}
+<tr>
+  <td><strong>{{ c['nombre'] }}</strong></td>
+  <td class="mini">{{ c['alias'] or '—' }}</td>
+  <td>{{ c['modo_entrega'] }}{% if c['modo_entrega']=='email' %} → {{ c['email_para'] or '⚠ sin dirección' }}{% endif %}</td>
+  <td>{{ '✓ sí' if c['auto_entrega'] else 'no (con botón)' }}</td>
+  <td>{{ c['n_albaranes'] }}</td>
+  <td><a class="boton suave" href="{{ url_for('cliente_form', cid=c['id']) }}">Editar</a></td>
+</tr>
+{% else %}
+<tr><td colspan="6" class="mini">Todavía no hay clientes dados de alta.</td></tr>
+{% endfor %}
+</table></div>
+{% endblock %}

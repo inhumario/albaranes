@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block titulo %}Acceso — Albaranes{% endblock %}
+{% block cuerpo %}
+<div style="max-width:360px;margin:12vh auto 0">
+  <h1 style="text-align:center">📦 Albaranes</h1>
+  <form method="post" class="tarjeta" style="padding:1.2rem">
+    <label>Contraseña</label>
+    <input type="password" name="clave" autofocus required>
+    <p style="margin-bottom:0"><button class="boton" style="width:100%">Entrar</button></p>
+  </form>
+</div>
+{% endblock %}

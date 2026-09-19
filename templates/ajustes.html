@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block titulo %}Ajustes — Albaranes{% endblock %}
+{% block cuerpo %}
+<h1>Ajustes</h1>
+<p class="mini">Los protocolos de cada cliente (alias, canal y destino de entrega) se configuran en
+<a href="{{ url_for('clientes') }}">Clientes</a>. Aquí van las comunicaciones y el acceso.</p>
+
+<h2>Comunicaciones — email saliente (SMTP)</h2>
+<form method="post" style="max-width:560px">
+  <input type="hidden" name="accion" value="smtp">
+  <label>Servidor</label>
+  <input type="text" name="smtp_host" value="{{ smtp['smtp_host'] }}" placeholder="smtp.suempresa.com">
+  <label>Puerto <span class="mini">(465 SSL)</span></label>
+  <input type="text" name="smtp_puerto" value="{{ smtp['smtp_puerto'] or '465' }}">
+  <label>Usuario</label>
+  <input type="text" name="smtp_usuario" value="{{ smtp['smtp_usuario'] }}">
+  <label>Contraseña <span class="mini">(en blanco = conservar la guardada)</span></label>
+  <input type="password" name="smtp_clave" value="">
+  <label>Remitente (De:)</label>
+  <input type="text" name="smtp_de" value="{{ smtp['smtp_de'] }}" placeholder="albaranes@suempresa.com">
+  <p><button class="boton">Guardar comunicaciones</button></p>
+</form>
+
+<form method="post" style="max-width:560px">
+  <input type="hidden" name="accion" value="probar">
+  <label>Enviar email de prueba a</label>
+  <input type="text" name="destino" placeholder="tu@email.com">
+  <p><button class="boton suave">Probar envío</button></p>
+</form>
+
+<h2>Acceso</h2>
+<form method="post" style="max-width:560px">
+  <input type="hidden" name="accion" value="clave">
+  {% if hay_clave %}
+  <label>Contraseña actual</label>
+  <input type="password" name="actual">
+  {% endif %}
+  <label>Contraseña nueva <span class="mini">(mínimo 8 caracteres)</span></label>
+  <input type="password" name="nueva" required>
+  <p><button class="boton">Cambiar contraseña</button></p>
+</form>
+
+<p class="mini" style="margin-top:2rem">Versión {{ version }}</p>
+{% endblock %}

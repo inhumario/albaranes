@@ -1,0 +1,23 @@
+{% extends 'base.html' %}
+{% block titulo %}Archivo — Albaranes{% endblock %}
+{% block cuerpo %}
+<h1>Archivo</h1>
+<form method="get" style="margin-bottom:1rem">
+  <input type="search" name="q" value="{{ q }}" placeholder="Buscar por número, cliente o emisor…">
+</form>
+<div class="tabla-scroll"><table>
+<tr><th>Nº albarán</th><th>Cliente</th><th>Fecha</th><th>Pág.</th><th>Estado</th><th></th></tr>
+{% for a in filas %}
+<tr>
+  <td><strong>{{ a['numero'] or '(sin número)' }}</strong></td>
+  <td>{{ a['cliente'] or a['emisor'] or '—' }}</td>
+  <td>{{ a['creado'][:10] }}</td>
+  <td>{{ a['paginas'] }}</td>
+  <td><span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span></td>
+  <td><a class="boton suave" href="{{ url_for('albaran_pdf', aid=a['id']) }}">PDF</a></td>
+</tr>
+{% else %}
+<tr><td colspan="6" class="mini">Sin resultados.</td></tr>
+{% endfor %}
+</table></div>
+{% endblock %}
