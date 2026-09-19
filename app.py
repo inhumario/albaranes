@@ -24,7 +24,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'

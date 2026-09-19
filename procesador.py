@@ -59,9 +59,15 @@ PROMPT_VERIFICACION = ('Devuelve SOLO el número identificador del albarán de e
                        'dígito a dígito y sin nada más. Si no hay número, devuelve NO.')
 
 
-def _pedir(datos: str, prompt: str, max_tokens: int = 300) -> str:
+MODELO_CONTRASTE = 'claude-sonnet-5'
+DPI_CONTRASTE = 220
+
+
+def _pedir(datos: str, prompt: str, max_tokens: int = 300, modelo: str = MODELO) -> str:
+    # temperature=0 solo donde el modelo lo admite (Sonnet 5 lo rechaza como deprecado)
+    extra = {'temperature': 0} if modelo == MODELO else {}
     resp = _api().messages.create(
-        model=MODELO, max_tokens=max_tokens, extra_body={'temperature': 0},
+        model=modelo, max_tokens=max_tokens, extra_body=extra,
         messages=[{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': datos}},
             {'type': 'text', 'text': prompt},
@@ -69,15 +75,26 @@ def _pedir(datos: str, prompt: str, max_tokens: int = 300) -> str:
     return resp.content[0].text
 
 
-def _analizar_pagina(png: Path) -> dict:
-    """Doble lectura: la extracción completa y una segunda lectura solo del número.
-    Si no coinciden, el albarán va a revisión — nunca se archiva un número dudoso
-    (en una pasada real el modelo llegó a trasponer dos dígitos con confianza alta)."""
+def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
+    """Doble lectura DESCORRELACIONADA: la extracción completa (Haiku, render 150 dpi)
+    se contrasta con una segunda lectura solo del número hecha por otro modelo sobre
+    otro renderizado (Sonnet, 220 dpi). Si no coinciden, el albarán va a revisión —
+    nunca se archiva un número dudoso. Con la misma imagen y el mismo modelo no basta:
+    en una pasada real las dos lecturas coincidieron en un número con dos dígitos
+    traspuestos (80643536 por 80463536)."""
     datos = base64.standard_b64encode(png.read_bytes()).decode()
     m = re.search(r'\{.*\}', _pedir(datos, PROMPT), re.S)
     info = json.loads(m.group(0)) if m else {'numero': None, 'confianza': 'baja'}
     if info.get('numero'):
-        contraste = re.sub(r'[^0-9A-Za-z/-]', '', _pedir(datos, PROMPT_VERIFICACION, 50))
+        with tempfile.TemporaryDirectory() as tmp:
+            pref = Path(tmp) / 'v'
+            subprocess.run(['pdftoppm', '-r', str(DPI_CONTRASTE), '-png',
+                            '-f', str(pagina + 1), '-l', str(pagina + 1), str(pdf), str(pref)],
+                           check=True)
+            png2 = next(Path(tmp).glob('v-*.png'))
+            datos2 = base64.standard_b64encode(png2.read_bytes()).decode()
+        contraste = re.sub(r'[^0-9A-Za-z/-]', '',
+                           _pedir(datos2, PROMPT_VERIFICACION, 50, MODELO_CONTRASTE))
         if contraste != info['numero']:
             info['confianza'] = 'baja'
             info['numero_contraste'] = contraste
@@ -94,7 +111,7 @@ def procesar_pdf(pdf: Path) -> list[dict]:
         subprocess.run(['pdftoppm', '-r', str(DPI), '-png', str(pdf), str(prefijo)], check=True)
         pngs = sorted(Path(tmp).glob('p-*.png'))
         for i, png in enumerate(pngs):
-            info = _analizar_pagina(png)
+            info = _analizar_pagina(png, pdf, i)
             numero = info.get('numero')
             cont = str(info.get('es_continuacion')).lower() == 'true'
             if actual and (numero == actual['numero'] or (cont and not numero)):
