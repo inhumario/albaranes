@@ -54,16 +54,34 @@ def normaliza(texto: str) -> str:
     return re.sub(r'[^a-z0-9]+', '-', plano).strip('-')
 
 
-def _analizar_pagina(png: Path) -> dict:
-    datos = base64.standard_b64encode(png.read_bytes()).decode()
+PROMPT_VERIFICACION = ('Devuelve SOLO el número identificador del albarán de esta página '
+                       '(el que acompaña a DELIVERY NOTE / ALBARÁN Nº / Nº DOCUMENTO), '
+                       'dígito a dígito y sin nada más. Si no hay número, devuelve NO.')
+
+
+def _pedir(datos: str, prompt: str, max_tokens: int = 300) -> str:
     resp = _api().messages.create(
-        model=MODELO, max_tokens=300,
+        model=MODELO, max_tokens=max_tokens, extra_body={'temperature': 0},
         messages=[{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': datos}},
-            {'type': 'text', 'text': PROMPT},
+            {'type': 'text', 'text': prompt},
         ]}])
-    m = re.search(r'\{.*\}', resp.content[0].text, re.S)
-    return json.loads(m.group(0)) if m else {'numero': None, 'confianza': 'baja'}
+    return resp.content[0].text
+
+
+def _analizar_pagina(png: Path) -> dict:
+    """Doble lectura: la extracción completa y una segunda lectura solo del número.
+    Si no coinciden, el albarán va a revisión — nunca se archiva un número dudoso
+    (en una pasada real el modelo llegó a trasponer dos dígitos con confianza alta)."""
+    datos = base64.standard_b64encode(png.read_bytes()).decode()
+    m = re.search(r'\{.*\}', _pedir(datos, PROMPT), re.S)
+    info = json.loads(m.group(0)) if m else {'numero': None, 'confianza': 'baja'}
+    if info.get('numero'):
+        contraste = re.sub(r'[^0-9A-Za-z/-]', '', _pedir(datos, PROMPT_VERIFICACION, 50))
+        if contraste != info['numero']:
+            info['confianza'] = 'baja'
+            info['numero_contraste'] = contraste
+    return info
 
 
 def procesar_pdf(pdf: Path) -> list[dict]:

@@ -45,16 +45,19 @@ configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a
 
 <h2>Últimos escaneos</h2>
 <div class="tabla-scroll"><table>
-<tr><th>Recibido</th><th>Fichero</th><th>Páginas</th><th>Estado</th></tr>
+<tr><th>Recibido</th><th>Fichero</th><th>Páginas</th><th>Estado</th><th></th></tr>
 {% for l in lotes %}
 <tr>
   <td>{{ l['recibido'].replace('T',' ') }}</td>
   <td>{{ l['fichero'] }}</td>
   <td>{{ l['paginas'] or '…' }}</td>
   <td><span class="pill {{ 'error' if l['estado'].startswith('error') else l['estado'] }}">{{ l['estado'] }}</span></td>
+  <td><form class="linea" method="post" action="{{ url_for('lote_borrar', lid=l['id']) }}"
+        onsubmit="return confirm('¿Borrar el lote {{ l['id'] }} con todos sus albaranes archivados?')">
+      <button class="boton suave">Borrar</button></form></td>
 </tr>
 {% else %}
-<tr><td colspan="4" class="mini">Todavía no hay escaneos.</td></tr>
+<tr><td colspan="5" class="mini">Todavía no hay escaneos.</td></tr>
 {% endfor %}
 </table></div>
 {% endblock %}

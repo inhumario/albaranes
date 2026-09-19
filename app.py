@@ -24,7 +24,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -349,6 +349,19 @@ def albaran_marcar(aid):
                     ('entregado', '', datetime.now().isoformat(timespec='seconds'), aid))
     flash('Marcado como entregado.')
     return redirect(request.referrer or url_for('index'))
+
+
+@app.route('/lote/<int:lid>/borrar', methods=['POST'])
+@requiere_acceso
+def lote_borrar(lid):
+    """Borra un lote entero (registros y PDFs archivados) para poder rehacerlo."""
+    with db() as con:
+        for a in con.execute('SELECT ruta FROM albaranes WHERE lote_id=?', (lid,)):
+            (DATA / a['ruta']).unlink(missing_ok=True)
+        con.execute('DELETE FROM albaranes WHERE lote_id=?', (lid,))
+        con.execute('DELETE FROM lotes WHERE id=?', (lid,))
+    flash(f'Lote {lid} borrado (registros y archivos). Puedes volver a subir el escaneo.')
+    return redirect(url_for('index'))
 
 
 @app.route('/clientes')
