@@ -1,7 +1,22 @@
-# Aplicativo de albaranes — v0.1 (2026-09-19)
+# Aplicativo de albaranes — v0.3 (2026-09-19)
 
 App web (Flask + SQLite) que implementa el flujo que describió Mario el 19-09:
-**escanear → subir → archivar para ellos → entregar a cada cliente según su configuración**.
+**web con contraseña → subir el archivo sin más → archivar para ellos → entregar a cada
+cliente según su protocolo configurado** («subir y estar»).
+
+## Producción
+
+- **URL**: https://albaranes.inhumario.com (contraseña inicial en Infisical `albaranes/ACCESO_CLAVE`;
+  se cambia desde Ajustes).
+- **Deploy**: EasyPanel `travelia/albaranes`, build Dockerfile desde el repo público
+  `github.com/inhumario/albaranes` (main), volumen `albaranes-data` → `/data` (SQLite + archivo).
+  Push a main NO redespliega: `python3 scripts/deploy_easypanel.py deploy`.
+- **Secretos**: Infisical carpeta `albaranes` (SECRET_KEY, ACCESO_CLAVE, ANTHROPIC_API_KEY,
+  DATA_DIR, DB_PATH, BASE_URL). DNS: A `albaranes.inhumario.com` → 46.202.168.58 (Cloudflare, DNS only).
+- **Acceso**: contraseña única (PBKDF2 en BD, sesión 30 días). La primera contraseña sale de la
+  variable `ACCESO_CLAVE`; luego manda la de la BD (Ajustes → Acceso).
+- **Ajustes** (en la propia web): Comunicaciones (SMTP saliente con prueba de envío; la clave SMTP
+  vive en la BD del volumen) y cambio de contraseña. Los protocolos por cliente, en Clientes.
 
 ## Flujo
 
@@ -40,10 +55,11 @@ SMTP para el envío real: `config/smtp.json` con `{"host","puerto","usuario","cl
 (sin ese fichero, las entregas por email quedan en «pendiente» y lo dicen).
 En producción: clave en Infisical, no en fichero.
 
-## Pendiente para producción (cuando Mario dé el OK y José Miguel conteste las preguntas)
+## Pendiente (cuando José Miguel conteste las preguntas de la ficha)
 
-- Buzón scan-to-email vigilado por cron (la bizhub C3320i escanea directo ahí).
-- Carpeta de archivo en Drive compartido (o lo que usen ellos).
-- Despliegue con usuario/contraseña (EasyPanel, subdominio tipo albaranes.inhumario.com).
-- SMTP real de su empresa + conectores SFTP/portal por cliente según lleguen.
+- SMTP real de su empresa (ahora mismo, para la demo, está el Gmail de Mario en la BD local
+  de desarrollo; en producción se configura desde Ajustes).
+- Conectores SFTP/portal por cliente según se vean sus portales.
 - Aviso resumen por WhatsApp/email al terminar cada lote.
+- Decisión Mario: entrada extra por buzón scan-to-email (la bizhub escanea directo) y/o espejo
+  del archivo en un Drive compartido — de momento la entrada única es la subida en la web.
