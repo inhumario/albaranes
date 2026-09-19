@@ -1,4 +1,11 @@
-# Aplicativo de albaranes — v0.3 (2026-09-19)
+# Aplicativo de albaranes — v0.3.2 (2026-09-19)
+
+**Fiabilidad del número (v0.3.2)**: la lectura principal (Haiku, 150 dpi, temperatura 0) se
+contrasta con una lectura **descorrelacionada** (Sonnet 5, renderizado a 220 dpi, otro prompt);
+si no coinciden, el albarán va a REVISAR y no se archiva con número dudoso. Motivo: en una
+pasada real se archivó `80643536` por `80463536` con confianza alta, y la doble lectura con el
+mismo modelo y la misma imagen repitió el mismo error — la redundancia solo protege si las dos
+lecturas no comparten modelo ni renderizado. Validado en producción: 7/7.
 
 App web (Flask + SQLite) que implementa el flujo que describió Mario el 19-09:
 **web con contraseña → subir el archivo sin más → archivar para ellos → entregar a cada
