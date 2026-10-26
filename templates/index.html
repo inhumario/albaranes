@@ -6,13 +6,14 @@ configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a
 
 <form class="subida" method="post" action="{{ url_for('subir') }}" enctype="multipart/form-data">
   <strong>Subir escaneo</strong>
-  <span class="mini">la pila entera en un solo PDF — el sistema separa, nombra y clasifica solo</span>
-  <input type="file" name="escaneo" accept="application/pdf" required>
+  <span class="mini">la pila entera en un PDF, o varios PDF a la vez — el sistema separa, nombra y clasifica solo</span>
+  <input type="file" name="escaneo" accept="application/pdf" multiple required>
   <button class="boton">Procesar</button>
 </form>
 
 <div class="tarjetas">
   <div class="tarjeta"><div class="n">{{ contadores.get('archivado',0) + contadores.get('entregado',0) + contadores.get('pendiente_entrega',0) }}</div><div class="t">albaranes archivados</div></div>
+  {% if contadores.get('colocado',0) %}<div class="tarjeta"><div class="n"><a href="{{ url_for('revision') }}">{{ contadores.get('colocado',0) }}</a></div><div class="t">colocados, sin enviar</div></div>{% endif %}
   <div class="tarjeta"><div class="n">{{ contadores.get('entregado',0) }}</div><div class="t">entregados a clientes</div></div>
   <div class="tarjeta"><div class="n">{{ contadores.get('pendiente_entrega',0) }}</div><div class="t">pendientes de entrega</div></div>
   <div class="tarjeta"><div class="n">{{ contadores.get('revisar',0) }}</div><div class="t">a revisar</div></div>

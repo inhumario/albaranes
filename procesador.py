@@ -101,17 +101,22 @@ def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
     return info
 
 
-def procesar_pdf(pdf: Path) -> list[dict]:
+def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
     """Devuelve un dict por albarán: numero, emisor, confianza, revisar,
-    paginas (índices) y writer con el PDF montado (llamar a .write())."""
+    paginas (índices) y writer con el PDF montado (llamar a .write()).
+    `avance(hechas, total)` se llama tras cada página (para la barra de progreso)."""
     grupos, actual = [], None
     lector = PdfReader(str(pdf))
     with tempfile.TemporaryDirectory() as tmp:
         prefijo = Path(tmp) / 'p'
         subprocess.run(['pdftoppm', '-r', str(DPI), '-png', str(pdf), str(prefijo)], check=True)
         pngs = sorted(Path(tmp).glob('p-*.png'))
+        if avance:
+            avance(0, len(pngs))
         for i, png in enumerate(pngs):
             info = _analizar_pagina(png, pdf, i)
+            if avance:
+                avance(i + 1, len(pngs))
             numero = info.get('numero')
             cont = str(info.get('es_continuacion')).lower() == 'true'
             if actual and (numero == actual['numero'] or (cont and not numero)):

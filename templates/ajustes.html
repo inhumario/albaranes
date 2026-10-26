@@ -5,6 +5,18 @@
 <p class="mini">Los protocolos de cada cliente (alias, canal y destino de entrega) se configuran en
 <a href="{{ url_for('clientes') }}">Clientes</a>. Aquí van las comunicaciones y el acceso.</p>
 
+<h2>Revisión antes de enviar</h2>
+<form method="post" style="max-width:560px">
+  <input type="hidden" name="accion" value="revision">
+  <label style="display:flex;align-items:center;gap:.5rem;font-weight:400;color:var(--texto)">
+    <input type="checkbox" name="revisar_antes" style="width:auto" {{ 'checked' if revisar_antes }}>
+    Al procesar, dejar los albaranes colocados en <strong>Revisión</strong> y no enviar nada a los
+    clientes hasta pulsar «Enviar».
+  </label>
+  <p class="mini">Desactivado, cada albarán sale solo según su cliente (el «subir y estar»).</p>
+  <p><button class="boton">Guardar</button></p>
+</form>
+
 <h2>Comunicaciones — email saliente (SMTP)</h2>
 <form method="post" style="max-width:560px">
   <input type="hidden" name="accion" value="smtp">

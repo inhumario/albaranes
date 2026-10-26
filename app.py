@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Aplicativo de albaranes — web con contraseña (v0.3, 2026-09-19).
+"""Aplicativo de albaranes — web con contraseña (v0.4, 2026-10-26).
 
 Flujo (regla de Mario: «subir y estar»): se sube el PDF de la pila escaneada →
 el procesador separa y lee cada albarán → se archiva en
 archivo/<cliente>/<año>/<mes>/<numero>.pdf → se entrega solo según el protocolo
 configurado de cada cliente (email automático, SFTP, portal). Todos los
 parámetros (clientes y comunicaciones) se ajustan desde la propia web.
+
+v0.4 (petición de Mario 26-10, para la demo): con «Revisar antes de enviar»
+(Ajustes, activado por defecto) lo procesado queda «colocado» y se ve en la
+pestaña Revisión ordenado por cliente y carpeta; nada sale hacia los clientes
+hasta pulsar «Enviar».
 """
 import hashlib
+import subprocess
 import json
 import os
 import secrets
@@ -24,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.3.2'
+VERSION = '0.4.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -84,7 +90,7 @@ def init_db() -> None:
             paginas INTEGER NOT NULL DEFAULT 1,
             confianza TEXT DEFAULT '',
             ruta TEXT NOT NULL,
-            estado TEXT NOT NULL DEFAULT 'archivado', -- archivado | pendiente_entrega | entregado | revisar
+            estado TEXT NOT NULL DEFAULT 'archivado', -- colocado | archivado | pendiente_entrega | entregado | revisar
             entrega_nota TEXT DEFAULT '',             -- por qué quedó pendiente (o instrucción de portal)
             entregado_el TEXT,
             creado TEXT NOT NULL
@@ -94,12 +100,21 @@ def init_db() -> None:
             con.execute("ALTER TABLE albaranes ADD COLUMN entrega_nota TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+        # migración v0.3 → v0.4: progreso del lote (páginas leídas)
+        try:
+            con.execute('ALTER TABLE lotes ADD COLUMN hechas INTEGER NOT NULL DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        if not cfg_get(con, 'revisar_antes'):
+            cfg_set(con, 'revisar_antes', '1')
         # contraseña inicial: de la variable ACCESO_CLAVE la primera vez
         if not cfg_get(con, 'clave_hash') and os.environ.get('ACCESO_CLAVE'):
             cfg_set(con, 'clave_hash', hash_clave(os.environ['ACCESO_CLAVE']))
         # migración desde config/smtp.json si existe y aún no hay SMTP en BD
+        # (solo con la BD de desarrollo por defecto: una BD de pruebas en otro DATA_DIR
+        # no debe heredar un SMTP real y mandar correos de verdad)
         legado = BASE / 'config' / 'smtp.json'
-        if legado.exists() and not cfg_get(con, 'smtp_host'):
+        if legado.exists() and not cfg_get(con, 'smtp_host') and 'DATA_DIR' not in os.environ:
             v = json.loads(legado.read_text())
             for a, b in (('host', 'smtp_host'), ('puerto', 'smtp_puerto'),
                          ('usuario', 'smtp_usuario'), ('clave', 'smtp_clave'), ('de', 'smtp_de')):
@@ -176,16 +191,28 @@ def casar_cliente(emisor: str, con: sqlite3.Connection):
     return None
 
 
+def carpeta_de(cliente, emisor: str, cuando: datetime) -> Path:
+    nombre = cliente['nombre'] if cliente else (emisor or 'sin-clasificar')
+    return ARCHIVO / procesador.normaliza(nombre) / f'{cuando:%Y}' / f'{cuando:%m}'
+
+
+def estado_final(cliente) -> str:
+    """Estado de un albarán ya aprobado: hacia el cliente o solo al archivo."""
+    return 'pendiente_entrega' if cliente and cliente['modo_entrega'] != 'ninguna' else 'archivado'
+
+
 def procesar_lote(lote_id: int, pdf: Path) -> None:
+    def avance(hechas, total):
+        with db() as con:
+            con.execute('UPDATE lotes SET hechas=?, paginas=? WHERE id=?', (hechas, total, lote_id))
     try:
-        grupos = procesador.procesar_pdf(pdf)
+        grupos = procesador.procesar_pdf(pdf, avance)
         ahora = datetime.now()
         with db() as con:
+            revisar_antes = cfg_get(con, 'revisar_antes') == '1'
             for g in grupos:
                 cliente = casar_cliente(g['emisor'], con)
-                carpeta_cliente = cliente['nombre'] if cliente else (g['emisor'] or 'sin-clasificar')
-                carpeta = (ARCHIVO / procesador.normaliza(carpeta_cliente)
-                           / f'{ahora:%Y}' / f'{ahora:%m}')
+                carpeta = carpeta_de(cliente, g['emisor'], ahora)
                 if g['revisar']:
                     carpeta = ARCHIVO / 'REVISAR'
                 carpeta.mkdir(parents=True, exist_ok=True)
@@ -196,10 +223,10 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
 
                 if g['revisar']:
                     estado = 'revisar'
-                elif cliente and cliente['modo_entrega'] != 'ninguna':
-                    estado = 'pendiente_entrega'
+                elif revisar_antes:
+                    estado = 'colocado'
                 else:
-                    estado = 'archivado'
+                    estado = estado_final(cliente)
                 cur = con.execute(
                     'INSERT INTO albaranes (lote_id, cliente_id, numero, emisor, paginas,'
                     ' confianza, ruta, estado, creado) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -269,6 +296,21 @@ def smtp_config(con: sqlite3.Connection) -> dict | None:
     return cfg if cfg['host'] and cfg['usuario'] else None
 
 
+def aprobar(albaran_id: int, con: sqlite3.Connection) -> str:
+    """Da por bueno un albarán colocado: lo entrega a su cliente o lo deja archivado."""
+    a = con.execute('SELECT a.cliente_id, c.modo_entrega FROM albaranes a '
+                    'LEFT JOIN clientes c ON c.id=a.cliente_id WHERE a.id=?',
+                    (albaran_id,)).fetchone()
+    estado = estado_final(a if a['cliente_id'] else None)
+    con.execute('UPDATE albaranes SET estado=? WHERE id=?', (estado, albaran_id))
+    if estado == 'archivado':
+        return 'archivado'
+    resultado = entregar(albaran_id, con)
+    if resultado != 'ok':
+        con.execute('UPDATE albaranes SET entrega_nota=? WHERE id=?', (resultado, albaran_id))
+    return resultado
+
+
 # ---------------------------------------------------------------------- rutas
 @app.route('/')
 @requiere_acceso
@@ -290,20 +332,126 @@ def index():
 @app.route('/subir', methods=['POST'])
 @requiere_acceso
 def subir():
-    f = request.files.get('escaneo')
-    if not f or not f.filename.lower().endswith('.pdf'):
-        flash('Sube un PDF (la pila escaneada entera).')
+    ficheros = [f for f in request.files.getlist('escaneo')
+                if f and f.filename.lower().endswith('.pdf')]
+    if not ficheros:
+        flash('Sube uno o varios PDF (la pila escaneada).')
         return redirect(url_for('index'))
     ENTRADA.mkdir(parents=True, exist_ok=True)
-    destino = ENTRADA / f'{datetime.now():%Y%m%d-%H%M%S}-{Path(f.filename).name}'
-    f.save(destino)
+    for n, f in enumerate(ficheros):
+        destino = ENTRADA / f'{datetime.now():%Y%m%d-%H%M%S}-{n}-{Path(f.filename).name}'
+        f.save(destino)
+        with db() as con:
+            cur = con.execute('INSERT INTO lotes (fichero, recibido) VALUES (?,?)',
+                              (Path(f.filename).name, datetime.now().isoformat(timespec='seconds')))
+            lote_id = cur.lastrowid
+        threading.Thread(target=procesar_lote, args=(lote_id, destino), daemon=True).start()
+    flash(f'{len(ficheros)} fichero(s) recibido(s): se están leyendo. Aquí los verás colocar.')
+    return redirect(url_for('revision'))
+
+
+@app.route('/revision')
+@requiere_acceso
+def revision():
     with db() as con:
-        cur = con.execute('INSERT INTO lotes (fichero, recibido) VALUES (?,?)',
-                          (destino.name, datetime.now().isoformat(timespec='seconds')))
-        lote_id = cur.lastrowid
-    threading.Thread(target=procesar_lote, args=(lote_id, destino), daemon=True).start()
-    flash('Escaneo recibido: procesando en segundo plano. Recarga en unos segundos.')
-    return redirect(url_for('index'))
+        en_curso = con.execute("SELECT * FROM lotes WHERE estado='procesando' ORDER BY id").fetchall()
+        filas = con.execute(
+            "SELECT a.*, c.nombre AS cliente, c.modo_entrega, c.email_para, c.portal_url, "
+            "c.sftp_datos FROM albaranes a LEFT JOIN clientes c ON c.id=a.cliente_id "
+            "WHERE a.estado IN ('colocado','revisar') ORDER BY c.nombre, a.numero").fetchall()
+        clientes = con.execute('SELECT id, nombre FROM clientes ORDER BY nombre').fetchall()
+        revisar_antes = cfg_get(con, 'revisar_antes') == '1'
+    grupos = {}  # carpeta → {cliente, destino, albaranes}
+    for a in filas:
+        if a['estado'] != 'colocado':
+            continue
+        carpeta = str(Path(a['ruta']).parent.relative_to('archivo')) + '/'
+        g = grupos.setdefault(carpeta, {'cliente': a['cliente'], 'cliente_id': a['cliente_id'],
+                                        'destino': destino_texto(a), 'albaranes': []})
+        g['albaranes'].append(a)
+    dudosos = [a for a in filas if a['estado'] == 'revisar']
+    return render_template('revision.html', en_curso=en_curso, grupos=grupos,
+                           dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
+                           n_colocados=sum(len(g['albaranes']) for g in grupos.values()))
+
+
+def destino_texto(a) -> str:
+    if not a['cliente']:
+        return 'sin cliente configurado: solo se archiva'
+    modo = a['modo_entrega']
+    if modo == 'email':
+        return f"email a {a['email_para'] or '(sin email configurado)'}"
+    if modo == 'sftp':
+        return f"SFTP {a['sftp_datos'] or '(sin configurar)'}"
+    if modo == 'portal':
+        return f"subir al portal {a['portal_url'] or '(sin URL)'}"
+    return 'solo archivar (este cliente no recibe envío)'
+
+
+@app.route('/revision/enviar', methods=['POST'])
+@requiere_acceso
+def revision_enviar():
+    """Aprueba lo colocado (todo, o solo una carpeta) y lo manda a cada cliente."""
+    carpeta = request.form.get('carpeta', '')
+    with db() as con:
+        ids = [r['id'] for r in con.execute(
+            "SELECT id, ruta FROM albaranes WHERE estado='colocado'")
+            if not carpeta or r['ruta'].startswith(f'archivo/{carpeta}')]
+        resultados = [aprobar(i, con) for i in ids]
+    ok = sum(r == 'ok' for r in resultados)
+    archivados = sum(r == 'archivado' for r in resultados)
+    otros = len(resultados) - ok - archivados
+    partes = [f'{ok} enviado(s) a su cliente'] if ok else []
+    if archivados:
+        partes.append(f'{archivados} solo archivado(s)')
+    if otros:
+        partes.append(f'{otros} pendiente(s) de entrega (ver Panel)')
+    flash('Hecho: ' + ', '.join(partes) + '.' if partes else 'No había nada colocado.')
+    return redirect(url_for('revision'))
+
+
+@app.route('/albaran/<int:aid>/corregir', methods=['POST'])
+@requiere_acceso
+def albaran_corregir(aid):
+    """Corrige número y/o cliente de un albarán y lo vuelve a colocar en su carpeta."""
+    numero = ''.join(request.form.get('numero', '').split())
+    cid = request.form.get('cliente_id') or None
+    if not numero:
+        flash('Pon el número del albarán.')
+        return redirect(url_for('revision'))
+    with db() as con:
+        a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
+        cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone() if cid else None
+        carpeta = carpeta_de(cliente, a['emisor'], datetime.fromisoformat(a['creado']))
+        carpeta.mkdir(parents=True, exist_ok=True)
+        destino = carpeta / f'{numero}.pdf'
+        origen = DATA / a['ruta']
+        if destino.exists() and destino != origen:
+            flash(f'Ya hay un albarán {numero} en {destino.parent.relative_to(ARCHIVO)}.')
+            return redirect(url_for('revision'))
+        origen.rename(destino)
+        con.execute("UPDATE albaranes SET numero=?, cliente_id=?, ruta=?, confianza='corregido', "
+                    "estado='colocado', entrega_nota='' WHERE id=?",
+                    (numero, cliente['id'] if cliente else None,
+                     str(destino.relative_to(DATA)), aid))
+    flash(f'Albarán {numero} colocado.')
+    return redirect(url_for('revision'))
+
+
+@app.route('/albaran/<int:aid>/miniatura')
+@requiere_acceso
+def albaran_miniatura(aid):
+    with db() as con:
+        a = con.execute('SELECT ruta, creado FROM albaranes WHERE id=?', (aid,)).fetchone()
+    pdf = DATA / a['ruta']
+    # clave por ruta + fecha: SQLite reutiliza ids cuando se vacía la tabla
+    clave = hashlib.sha1(f"{a['ruta']}|{a['creado']}|{pdf.stat().st_mtime}".encode()).hexdigest()
+    png = DATA / 'miniaturas' / f'{clave}.png'
+    if not png.exists():
+        png.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['pdftoppm', '-f', '1', '-l', '1', '-scale-to', '420', '-png',
+                        '-singlefile', str(pdf), str(png.with_suffix(''))], check=True)
+    return send_file(png, max_age=3600)
 
 
 @app.route('/albaranes')
@@ -412,6 +560,9 @@ def ajustes():
                         continue  # clave vacía = conservar la guardada
                     cfg_set(con, c, valor)
                 flash('Comunicaciones guardadas.')
+            elif accion == 'revision':
+                cfg_set(con, 'revisar_antes', '1' if request.form.get('revisar_antes') else '0')
+                flash('Guardado.')
             elif accion == 'probar':
                 cfg = smtp_config(con)
                 destino = request.form.get('destino', '').strip()
@@ -438,7 +589,9 @@ def ajustes():
             return redirect(url_for('ajustes'))
         smtp = {c: cfg_get(con, c) for c in CLAVES_SMTP}
         hay_clave = bool(cfg_get(con, 'clave_hash'))
-    return render_template('ajustes.html', smtp=smtp, hay_clave=hay_clave, version=VERSION)
+        revisar_antes = cfg_get(con, 'revisar_antes') == '1'
+    return render_template('ajustes.html', smtp=smtp, hay_clave=hay_clave, version=VERSION,
+                           revisar_antes=revisar_antes)
 
 
 @app.route('/salud')

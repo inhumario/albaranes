@@ -40,6 +40,7 @@ tr:nth-child(even) td{background:var(--zebra)}
 .pill.pendiente_entrega{background:var(--aviso-f);color:var(--aviso)}
 .pill.revisar,.pill.error{background:var(--rojo-f);color:var(--rojo)}
 .pill.procesando{background:var(--zebra);color:var(--sub)}
+.pill.colocado{background:#e6f0fb;color:#1d4f86}
 .boton{background:var(--sub);color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;
        font-size:.92rem;cursor:pointer;text-decoration:none;display:inline-block}
 .boton:hover{background:var(--titulo)}
@@ -65,6 +66,7 @@ a{color:var(--sub)}
   <span class="marca">📦 Albaranes</span>
   <nav>
     <a href="{{ url_for('index') }}" class="{{ 'activo' if request.endpoint=='index' }}">Panel</a>
+    <a href="{{ url_for('revision') }}" class="{{ 'activo' if request.endpoint=='revision' }}">Revisión</a>
     <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint=='albaranes' }}">Archivo</a>
     <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint and request.endpoint.startswith('cliente') }}">Clientes</a>
     <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint=='ajustes' }}">Ajustes</a>

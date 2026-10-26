@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% block titulo %}Revisión — Albaranes{% endblock %}
+{% block cuerpo %}
+{% if en_curso %}<meta http-equiv="refresh" content="3">{% endif %}
+<style>
+.lectura{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:.7rem .9rem;margin-bottom:.6rem}
+.barra{height:10px;background:var(--zebra);border:1px solid var(--borde);border-radius:99px;overflow:hidden;margin-top:.4rem}
+.barra span{display:block;height:100%;background:var(--filete);transition:width .5s}
+.carpeta{background:#fff;border:1px solid var(--borde);border-radius:10px;margin:1rem 0;overflow:hidden}
+.carpeta.dudas{border-color:#e3b6b6}
+.carpeta-cab{background:var(--cab);padding:.7rem .9rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--borde)}
+.carpeta.dudas .carpeta-cab{background:var(--rojo-f)}
+.carpeta-cab .ruta{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo)}
+.carpeta-cab .destino{font-size:.88rem;color:var(--sub)}
+.carpeta-cab form{margin-left:auto}
+.rejilla{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.8rem;padding:.9rem}
+.doc{border:1px solid var(--borde);border-radius:8px;background:var(--fondo);overflow:hidden;display:flex;flex-direction:column}
+.doc img{width:100%;aspect-ratio:210/297;object-fit:cover;object-position:top;border-bottom:1px solid var(--borde);background:#fff}
+.doc .pie{padding:.45rem .55rem;font-size:.85rem}
+.doc .nombre{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo);word-break:break-all}
+.doc details summary{cursor:pointer;color:var(--sub);font-size:.8rem;margin-top:.2rem}
+.doc details input,.doc details select{font-size:.85rem;padding:.3rem .4rem;margin-top:.3rem}
+.doc details .boton{margin-top:.4rem;padding:.3rem .6rem;font-size:.82rem}
+.enviar-todo{position:sticky;bottom:0;background:var(--fondo);border-top:2px solid var(--filete);padding:.8rem 0;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+.enviar-todo .boton{font-size:1rem;padding:.6rem 1.2rem}
+@media (max-width:640px){.rejilla{grid-template-columns:repeat(2,1fr);gap:.6rem;padding:.6rem}.carpeta-cab form{margin-left:0}}
+</style>
+
+<h1>Revisión</h1>
+<p class="mini">Así quedan colocados los albaranes antes de mandarlos.
+{% if revisar_antes %}No sale nada hacia los clientes hasta que pulses «Enviar».
+{% else %}⚠ «Revisar antes de enviar» está desactivado en Ajustes: lo nuevo se envía solo.{% endif %}</p>
+
+{% for l in en_curso %}
+<div class="lectura">
+  <strong>Leyendo {{ l['fichero'] }}</strong>
+  <span class="mini">— {% if l['paginas'] %}página {{ l['hechas'] }} de {{ l['paginas'] }}{% else %}preparando las páginas…{% endif %}</span>
+  <div class="barra"><span style="width:{{ (100 * l['hechas'] / l['paginas']) | round | int if l['paginas'] else 3 }}%"></span></div>
+</div>
+{% endfor %}
+
+{% if dudosos %}
+<div class="carpeta dudas">
+  <div class="carpeta-cab">
+    <span class="ruta">REVISAR/</span>
+    <span class="destino">no se ha podido asegurar el número: compruébalo y colócalo (no se envía nada con un número dudoso)</span>
+  </div>
+  <div class="rejilla">
+  {% for a in dudosos %}
+    <div class="doc">
+      <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
+      <div class="pie">
+        <div class="nombre">{{ a['numero'] or '(sin número)' }}</div>
+        <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · {{ a['cliente'] or a['emisor'] or 'emisor desconocido' }}</div>
+        <form method="post" action="{{ url_for('albaran_corregir', aid=a['id']) }}">
+          <input type="text" name="numero" value="{{ a['numero'] or '' }}" placeholder="Nº del albarán" required>
+          <select name="cliente_id">
+            <option value="">(sin cliente)</option>
+            {% for c in clientes %}<option value="{{ c['id'] }}" {{ 'selected' if c['id']==a['cliente_id'] }}>{{ c['nombre'] }}</option>{% endfor %}
+          </select>
+          <button class="boton">Colocar</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% for carpeta, g in grupos.items() %}
+<div class="carpeta">
+  <div class="carpeta-cab">
+    <span class="ruta">📁 {{ carpeta }}</span>
+    <span class="destino">{{ g['albaranes']|length }} albarán{{ 'es' if g['albaranes']|length > 1 }} · {{ g['cliente'] or 'sin cliente' }} → {{ g['destino'] }}</span>
+    <form method="post" action="{{ url_for('revision_enviar') }}"
+          onsubmit="return confirm('¿Enviar los {{ g['albaranes']|length }} albaranes de {{ carpeta }}?')">
+      <input type="hidden" name="carpeta" value="{{ carpeta }}">
+      <button class="boton suave">Enviar esta carpeta</button>
+    </form>
+  </div>
+  <div class="rejilla">
+  {% for a in g['albaranes'] %}
+    <div class="doc">
+      <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
+      <div class="pie">
+        <div class="nombre">{{ a['numero'] }}.pdf</div>
+        <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}{% if a['confianza']=='corregido' %} · corregido a mano{% endif %}</div>
+        <details>
+          <summary>Corregir</summary>
+          <form method="post" action="{{ url_for('albaran_corregir', aid=a['id']) }}">
+            <input type="text" name="numero" value="{{ a['numero'] }}" required>
+            <select name="cliente_id">
+              <option value="">(sin cliente)</option>
+              {% for c in clientes %}<option value="{{ c['id'] }}" {{ 'selected' if c['id']==a['cliente_id'] }}>{{ c['nombre'] }}</option>{% endfor %}
+            </select>
+            <button class="boton">Guardar</button>
+          </form>
+        </details>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+{% if not grupos and not dudosos and not en_curso %}
+<div class="aviso">No hay nada pendiente de revisar. Sube un escaneo desde el <a href="{{ url_for('index') }}">Panel</a>.</div>
+{% endif %}
+
+{% if n_colocados %}
+<div class="enviar-todo">
+  <form method="post" action="{{ url_for('revision_enviar') }}"
+        onsubmit="return confirm('¿Enviar los {{ n_colocados }} albaranes colocados a sus clientes?')">
+    <button class="boton">Enviar todo a los clientes ({{ n_colocados }})</button>
+  </form>
+  {% if dudosos %}<span class="mini">Los de REVISAR se quedan aquí hasta que los coloques.</span>{% endif %}
+</div>
+{% endif %}
+{% endblock %}
