@@ -9,14 +9,14 @@
 </div>
 
 {% if not q %}
-<nav class="migas">
+<div class="migas">
   <a href="{{ url_for('albaranes') }}">📦 Archivo</a>
   {% for m in migas %}
     <span class="sep">›</span>
     {% if loop.last %}<strong>{{ m['nombre'] }}</strong>
     {% else %}<a href="{{ url_for('albaranes', carpeta=m['ruta']) }}">{{ m['nombre'] }}</a>{% endif %}
   {% endfor %}
-</nav>
+</div>
 {% endif %}
 
 <form method="get" action="{{ url_for('albaranes') }}" style="margin-bottom:1rem">
