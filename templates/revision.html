@@ -67,7 +67,7 @@
     <form method="post" action="{{ url_for('revision_enviar') }}"
           onsubmit="return confirm('¿Enviar los {{ g['albaranes']|length }} albaranes de {{ carpeta }}?')">
       <input type="hidden" name="carpeta" value="{{ carpeta }}">
-      <button class="boton suave">Enviar esta carpeta</button>
+      <button class="boton suave">{{ 'Preparar para subir al portal' if g['modo'] == 'portal' else 'Enviar esta carpeta' }}</button>
     </form>
   </div>
   <div class="rejilla">
@@ -75,7 +75,7 @@
     <div class="doc">
       <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
       <div class="pie">
-        <div class="nombre">{{ a['numero'] }}.pdf</div>
+        <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
         <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}{% if a['confianza']=='corregido' %} · corregido a mano{% endif %}</div>
         <details>
           <summary>Corregir</summary>

@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.5.1'
+VERSION = '0.6.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -105,6 +105,13 @@ def init_db() -> None:
             con.execute('ALTER TABLE lotes ADD COLUMN hechas INTEGER NOT NULL DEFAULT 0')
         except sqlite3.OperationalError:
             pass
+        # v0.6: cómo quiere cada cliente el nombre del fichero y sus instrucciones de entrega
+        for col in ("nombre_formato TEXT NOT NULL DEFAULT '{numero}'",
+                    "instrucciones TEXT NOT NULL DEFAULT ''"):
+            try:
+                con.execute(f'ALTER TABLE clientes ADD COLUMN {col}')
+            except sqlite3.OperationalError:
+                pass
         if not cfg_get(con, 'revisar_antes'):
             cfg_set(con, 'revisar_antes', '1')
         # contraseña inicial: de la variable ACCESO_CLAVE la primera vez
@@ -191,6 +198,33 @@ def casar_cliente(emisor: str, con: sqlite3.Connection):
     return None
 
 
+PROHIBIDOS = str.maketrans({c: '-' for c in '/\\:*?"<>|'})
+
+
+def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime) -> str:
+    """Nombre del PDF según el formato que pide cada cliente (ficha del cliente).
+    Variables: {numero} {cliente} {emisor} {fecha} (AAAAMMDD) {año} {mes} {dia}."""
+    formato = (cliente['nombre_formato'] if cliente else '') or '{numero}'
+    valores = {'numero': numero, 'cliente': cliente['nombre'] if cliente else '',
+               'emisor': emisor or '', 'fecha': f'{cuando:%Y%m%d}', 'año': f'{cuando:%Y}',
+               'anio': f'{cuando:%Y}', 'mes': f'{cuando:%m}', 'dia': f'{cuando:%d}'}
+    try:
+        nombre = formato.format(**valores)
+    except (KeyError, IndexError, ValueError):
+        nombre = numero  # formato mal escrito: nunca se queda sin nombre
+    nombre = nombre.translate(PROHIBIDOS).strip(' .') or numero
+    return nombre if nombre.lower().endswith('.pdf') else nombre + '.pdf'
+
+
+def destino_libre(carpeta: Path, nombre: str, propio: Path | None = None) -> Path:
+    """Ruta en la carpeta sin pisar otro albarán (si coincide el nombre, añade -2, -3…)."""
+    destino, n = carpeta / nombre, 2
+    while destino.exists() and destino != propio:
+        destino = carpeta / f'{Path(nombre).stem}-{n}.pdf'
+        n += 1
+    return destino
+
+
 def carpeta_de(cliente, emisor: str, cuando: datetime) -> Path:
     nombre = cliente['nombre'] if cliente else (emisor or 'sin-clasificar')
     return ARCHIVO / procesador.normaliza(nombre) / f'{cuando:%Y}' / f'{cuando:%m}'
@@ -216,8 +250,11 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                 if g['revisar']:
                     carpeta = ARCHIVO / 'REVISAR'
                 carpeta.mkdir(parents=True, exist_ok=True)
-                nombre = f"{g['numero'] or 'sin-numero-lote%d-p%d' % (lote_id, g['paginas'][0]+1)}.pdf"
-                destino = carpeta / nombre
+                if g['numero'] and not g['revisar']:
+                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], ahora)
+                else:
+                    nombre = f"{g['numero'] or 'sin-numero-lote%d-p%d' % (lote_id, g['paginas'][0]+1)}.pdf"
+                destino = destino_libre(carpeta, nombre)
                 with destino.open('wb') as f:
                     g['writer'].write(f)
 
@@ -257,7 +294,7 @@ def entregar(albaran_id: int, con: sqlite3.Connection) -> str:
     elif a['modo_entrega'] == 'sftp':
         resultado = 'SFTP configurado pero el conector se activa en producción'
     else:  # portal
-        resultado = f"subir a mano al portal: {a['portal_url'] or '(URL sin configurar)'}"
+        resultado = 'para subir al portal'
     if resultado == 'ok':
         con.execute('UPDATE albaranes SET estado=?, entrega_nota=?, entregado_el=? WHERE id=?',
                     ('entregado', '', datetime.now().isoformat(timespec='seconds'), albaran_id))
@@ -277,7 +314,7 @@ def entregar_email(a: sqlite3.Row, con: sqlite3.Connection) -> str:
         '{fecha}', datetime.now().strftime('%d/%m/%Y')).replace('{numero}', a['numero'] or '')
     msg.set_content(f"Adjuntamos el albarán {a['numero']}.\n\nUn saludo.")
     msg.add_attachment((DATA / a['ruta']).read_bytes(), maintype='application',
-                       subtype='pdf', filename=f"{a['numero']}.pdf")
+                       subtype='pdf', filename=Path(a['ruta']).name)
     return enviar_smtp(cfg, msg)
 
 
@@ -367,7 +404,8 @@ def revision():
             continue
         carpeta = str(Path(a['ruta']).parent.relative_to('archivo')) + '/'
         g = grupos.setdefault(carpeta, {'cliente': a['cliente'], 'cliente_id': a['cliente_id'],
-                                        'destino': destino_texto(a), 'albaranes': []})
+                                        'destino': destino_texto(a), 'modo': a['modo_entrega'],
+                                        'albaranes': []})
         g['albaranes'].append(a)
     dudosos = [a for a in filas if a['estado'] == 'revisar']
     return render_template('revision.html', en_curso=en_curso, grupos=grupos,
@@ -400,14 +438,74 @@ def revision_enviar():
         resultados = [aprobar(i, con) for i in ids]
     ok = sum(r == 'ok' for r in resultados)
     archivados = sum(r == 'archivado' for r in resultados)
-    otros = len(resultados) - ok - archivados
+    a_portal = sum(r == 'para subir al portal' for r in resultados)
+    otros = len(resultados) - ok - archivados - a_portal
     partes = [f'{ok} enviado(s) a su cliente'] if ok else []
     if archivados:
         partes.append(f'{archivados} solo archivado(s)')
+    if a_portal:
+        partes.append(f'{a_portal} preparado(s) para subir al portal')
     if otros:
         partes.append(f'{otros} pendiente(s) de entrega (ver Panel)')
     flash('Hecho: ' + ', '.join(partes) + '.' if partes else 'No había nada colocado.')
+    if a_portal and not ok and not otros:
+        with db() as con:
+            cid = con.execute("SELECT cliente_id FROM albaranes WHERE id=?", (ids[0],)).fetchone()[0]
+        if cid and all(r == 'para subir al portal' for r in resultados):
+            return redirect(url_for('portal', cid=cid))
     return redirect(url_for('revision'))
+
+
+@app.route('/portal/<int:cid>')
+@requiere_acceso
+def portal(cid):
+    """Subida manual a un portal: abrir el portal, descargar lo pendiente ya con el
+    nombre que pide el cliente, subirlo allí y marcarlo aquí como subido."""
+    with db() as con:
+        cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone()
+        if not cliente:
+            return redirect(url_for('clientes'))
+        pendientes = con.execute(
+            "SELECT * FROM albaranes WHERE cliente_id=? AND estado='pendiente_entrega' "
+            "ORDER BY ruta", (cid,)).fetchall()
+        subidos = con.execute(
+            "SELECT * FROM albaranes WHERE cliente_id=? AND estado='entregado' "
+            "ORDER BY entregado_el DESC LIMIT 10", (cid,)).fetchall()
+    return render_template('portal.html', c=cliente, pendientes=pendientes, subidos=subidos)
+
+
+@app.route('/portal/<int:cid>/zip')
+@requiere_acceso
+def portal_zip(cid):
+    """Los pendientes de ese cliente en un ZIP plano, con su nombre de entrega."""
+    import io
+    import zipfile
+    with db() as con:
+        cliente = con.execute('SELECT nombre FROM clientes WHERE id=?', (cid,)).fetchone()
+        filas = con.execute("SELECT ruta FROM albaranes WHERE cliente_id=? AND "
+                            "estado='pendiente_entrega' ORDER BY ruta", (cid,)).fetchall()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for a in filas:
+            z.write(DATA / a['ruta'], Path(a['ruta']).name)
+    buf.seek(0)
+    return send_file(buf, mimetype='application/zip', as_attachment=True,
+                     download_name=f"{procesador.normaliza(cliente['nombre'])}-para-subir-"
+                                   f"{datetime.now():%Y%m%d}.zip")
+
+
+@app.route('/portal/<int:cid>/subidos', methods=['POST'])
+@requiere_acceso
+def portal_subidos(cid):
+    ids = [int(i) for i in request.form.getlist('ids') if i.isdigit()]
+    ahora = datetime.now().isoformat(timespec='seconds')
+    with db() as con:
+        for i in ids:
+            con.execute("UPDATE albaranes SET estado='entregado', entrega_nota='', entregado_el=? "
+                        "WHERE id=? AND cliente_id=? AND estado='pendiente_entrega'", (ahora, i, cid))
+    flash(f'{len(ids)} albarán(es) marcado(s) como subidos al portal.' if ids
+          else 'No has marcado ninguno.')
+    return redirect(url_for('portal', cid=cid))
 
 
 @app.route('/albaran/<int:aid>/corregir', methods=['POST'])
@@ -424,11 +522,12 @@ def albaran_corregir(aid):
         cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone() if cid else None
         carpeta = carpeta_de(cliente, a['emisor'], datetime.fromisoformat(a['creado']))
         carpeta.mkdir(parents=True, exist_ok=True)
-        destino = carpeta / f'{numero}.pdf'
         origen = DATA / a['ruta']
-        if destino.exists() and destino != origen:
-            flash(f'Ya hay un albarán {numero} en {destino.parent.relative_to(ARCHIVO)}.')
+        nombre = nombre_fichero(cliente, numero, a['emisor'], datetime.fromisoformat(a['creado']))
+        if (carpeta / nombre).exists() and carpeta / nombre != origen:
+            flash(f'Ya hay un albarán con el nombre {nombre} en {carpeta.relative_to(ARCHIVO)}.')
             return redirect(url_for('revision'))
+        destino = carpeta / nombre
         origen.rename(destino)
         con.execute("UPDATE albaranes SET numero=?, cliente_id=?, ruta=?, confianza='corregido', "
                     "estado='colocado', entrega_nota='' WHERE id=?",
@@ -495,7 +594,7 @@ def albaranes(carpeta=''):
                                    carpetas=[], ficheros=[], carpeta='', ver='todos', cuenta={})
         prefijo = 'archivo/' + (carpeta + '/' if carpeta else '')
         filas = con.execute(
-            'SELECT a.*, c.nombre AS cliente FROM albaranes a '
+            'SELECT a.*, c.nombre AS cliente, c.modo_entrega FROM albaranes a '
             'LEFT JOIN clientes c ON c.id=a.cliente_id WHERE a.ruta LIKE ? '
             'ORDER BY a.ruta', (prefijo + '%',)).fetchall()
     nivel = len(carpeta.split('/')) if carpeta else 0
@@ -555,7 +654,7 @@ def carpeta_zip(carpeta):
 def albaran_pdf(aid):
     with db() as con:
         a = con.execute('SELECT ruta, numero FROM albaranes WHERE id=?', (aid,)).fetchone()
-    return send_file(DATA / a['ruta'], download_name=f"{a['numero']}.pdf")
+    return send_file(DATA / a['ruta'], download_name=Path(a['ruta']).name)
 
 
 @app.route('/albaran/<int:aid>/entregar', methods=['POST'])
@@ -610,7 +709,8 @@ def cliente_form(cid=None):
         if request.method == 'POST':
             campos = {k: request.form.get(k, '').strip() for k in
                       ('nombre', 'alias', 'modo_entrega', 'email_para', 'email_asunto',
-                       'sftp_datos', 'portal_url', 'notas')}
+                       'sftp_datos', 'portal_url', 'notas', 'nombre_formato', 'instrucciones')}
+            campos['nombre_formato'] = campos['nombre_formato'] or '{numero}'
             campos['auto_entrega'] = 1 if request.form.get('auto_entrega') else 0
             if not campos['nombre']:
                 flash('El nombre es obligatorio.')

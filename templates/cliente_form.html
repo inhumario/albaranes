@@ -9,6 +9,18 @@
   <label>Alias de membrete <span class="mini">(separados por comas; cómo aparece en sus albaranes, p.ej. «delaviuda, delaviuda alimentación»)</span></label>
   <input type="text" name="alias" value="{{ c['alias'] if c else '' }}">
 
+  <h2>Cómo quiere recibir los albaranes</h2>
+  <label>Nombre del fichero <span class="mini">(lo que pide este cliente; por defecto, solo el número)</span></label>
+  <input type="text" name="nombre_formato" id="formato" value="{{ c['nombre_formato'] if c and c['nombre_formato'] else '{numero}' }}">
+  <p class="mini" style="margin:.3rem 0 0">Puedes combinar texto fijo con: <code>{numero}</code> nº del albarán ·
+    <code>{fecha}</code> AAAAMMDD · <code>{año}</code> <code>{mes}</code> <code>{dia}</code> ·
+    <code>{cliente}</code>. Por ejemplo <code>ALB_{numero}</code> o <code>{fecha}_{numero}</code>.<br>
+    Así quedará: <strong id="ejemplo-nombre"></strong>
+    <br>Se aplica a lo que se procese desde ahora; lo ya archivado conserva su nombre.</p>
+
+  <label>Instrucciones de entrega <span class="mini">(formato, dónde se sube, qué datos piden… se ven al entregar)</span></label>
+  <textarea name="instrucciones" rows="3" placeholder="p.ej. En el portal: Documentos › Albaranes firmados. Un PDF por albarán, máximo 5 MB. Poner el nº de pedido en el campo Referencia.">{{ c['instrucciones'] if c else '' }}</textarea>
+
   <label>Canal de entrega</label>
   <select name="modo_entrega">
     {% for m in modos %}
@@ -39,4 +51,18 @@
   <p><button class="boton">Guardar</button>
      <a class="boton suave" href="{{ url_for('clientes') }}">Cancelar</a></p>
 </form>
+<script>
+(function () {
+  const f = document.getElementById('formato'), ej = document.getElementById('ejemplo-nombre');
+  const nombre = document.querySelector('input[name=nombre]');
+  function pinta() {
+    const v = {numero: '80463535', fecha: '20261027', 'año': '2026', anio: '2026', mes: '10', dia: '27',
+               cliente: nombre.value || 'Cliente', emisor: 'delaviuda'};
+    let n = (f.value || '{numero}').replace(/\{(\w+|año)\}/g, (m, k) => k in v ? v[k] : m);
+    n = n.replace(/[\/\\:*?"<>|]/g, '-').trim();
+    ej.textContent = /\.pdf$/i.test(n) ? n : n + '.pdf';
+  }
+  f.addEventListener('input', pinta); nombre.addEventListener('input', pinta); pinta();
+})();
+</script>
 {% endblock %}

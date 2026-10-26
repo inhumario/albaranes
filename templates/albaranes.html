@@ -76,11 +76,15 @@
         <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
         <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · escaneado {{ a['creado'][8:10] }}/{{ a['creado'][5:7] }}</div>
         {% if a['estado'] == 'entregado' %}
-          <div class="envio si">✓ Enviado{% if a['entregado_el'] %} el {{ a['entregado_el'][8:10] }}/{{ a['entregado_el'][5:7] }} a las {{ a['entregado_el'][11:16] }}{% endif %}</div>
+          <div class="envio si">✓ {{ 'Subido' if a['modo_entrega'] == 'portal' else 'Enviado' }}{% if a['entregado_el'] %} el {{ a['entregado_el'][8:10] }}/{{ a['entregado_el'][5:7] }} a las {{ a['entregado_el'][11:16] }}{% endif %}</div>
         {% elif a['estado'] == 'colocado' %}
           <div class="envio no">⏳ Sin enviar · <a href="{{ url_for('revision') }}">en Revisión</a></div>
         {% elif a['estado'] == 'pendiente_entrega' %}
+          {% if a['entrega_nota'] == 'para subir al portal' %}
+          <div class="envio no">⏳ Sin subir · <a href="{{ url_for('portal', cid=a['cliente_id']) }}">subir al portal</a></div>
+          {% else %}
           <div class="envio no">⏳ Sin enviar{% if a['entrega_nota'] %}<span class="mini"> · {{ a['entrega_nota'] }}</span>{% endif %}</div>
+          {% endif %}
         {% elif a['estado'] == 'revisar' %}
           <div class="envio no">⚠️ Para revisar · <a href="{{ url_for('revision') }}">colocar</a></div>
         {% else %}

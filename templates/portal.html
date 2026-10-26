@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block titulo %}Subir al portal de {{ c['nombre'] }} — Albaranes{% endblock %}
+{% block cuerpo %}
+<style>
+.pasos{display:grid;gap:.8rem;margin:1rem 0}
+.paso{background:#fff;border:1px solid var(--borde);border-radius:10px;padding:.9rem 1rem}
+.paso h2{margin:0 0 .5rem;font-size:1.02rem}
+.paso h2 .num{display:inline-block;width:1.6rem;height:1.6rem;border-radius:99px;background:var(--sub);color:#fff;
+              text-align:center;line-height:1.6rem;margin-right:.4rem;font-size:.9rem}
+.instrucciones{background:var(--aviso-f);border-left:4px solid var(--aviso);padding:.6rem .8rem;border-radius:6px;white-space:pre-line}
+.fila-subida{display:flex;align-items:center;gap:.7rem;padding:.45rem .2rem;border-bottom:1px solid var(--borde)}
+.fila-subida:last-child{border-bottom:0}
+.fila-subida label{margin:0;display:flex;align-items:center;gap:.6rem;flex:1;min-width:0;color:var(--texto);font-weight:400}
+.fila-subida input{width:1.15rem;height:1.15rem}
+.fila-subida .nombre-fichero{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo);word-break:break-all}
+</style>
+
+<h1>Subir al portal · {{ c['nombre'] }}</h1>
+<p class="mini">Este cliente no recibe los albaranes por email: hay que subirlos a su portal.
+Aquí los tienes ya ordenados y con el nombre que pide (<code>{{ c['nombre_formato'] or '{numero}' }}</code>).</p>
+
+{% if c['instrucciones'] %}<div class="instrucciones"><strong>Instrucciones de {{ c['nombre'] }}:</strong>
+{{ c['instrucciones'] }}</div>{% endif %}
+
+{% if pendientes %}
+<div class="pasos">
+  <div class="paso">
+    <h2><span class="num">1</span>Abre su portal</h2>
+    {% if c['portal_url'] %}
+      <a class="boton" href="{{ c['portal_url'] }}" target="_blank" rel="noopener">Abrir el portal de {{ c['nombre'] }} ↗</a>
+      <span class="mini">se abre en otra pestaña; entra con vuestro usuario</span>
+    {% else %}
+      <span class="mini">Falta la dirección del portal: <a href="{{ url_for('cliente_form', cid=c['id']) }}">ponla en la ficha del cliente</a>.</span>
+    {% endif %}
+  </div>
+
+  <div class="paso">
+    <h2><span class="num">2</span>Descarga los {{ pendientes|length }} albaranes y súbelos allí</h2>
+    <a class="boton" href="{{ url_for('portal_zip', cid=c['id']) }}">⬇ Descargar los {{ pendientes|length }} (.zip)</a>
+    <span class="mini">o uno a uno con su enlace; ya llevan el nombre correcto</span>
+  </div>
+
+  <form class="paso" method="post" action="{{ url_for('portal_subidos', cid=c['id']) }}">
+    <h2><span class="num">3</span>Marca los que ya has subido</h2>
+    {% for a in pendientes %}
+    <div class="fila-subida">
+      <label><input type="checkbox" name="ids" value="{{ a['id'] }}" checked>
+        <span class="nombre-fichero">{{ a['ruta'].rsplit('/', 1)[1] }}</span></label>
+      <span class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}</span>
+      <a class="boton suave" href="{{ url_for('albaran_pdf', aid=a['id']) }}" download>⬇</a>
+    </div>
+    {% endfor %}
+    <p style="margin:.8rem 0 0"><button class="boton">Ya están subidos</button>
+      <span class="mini">desmarca los que no hayas podido subir; se quedan aquí</span></p>
+  </form>
+</div>
+{% else %}
+<div class="aviso">No hay nada pendiente de subir al portal de {{ c['nombre'] }}.</div>
+{% endif %}
+
+{% if subidos %}
+<h2>Últimos subidos</h2>
+<div class="tabla-scroll"><table>
+<tr><th>Fichero</th><th>Subido</th><th></th></tr>
+{% for a in subidos %}
+<tr><td><code>{{ a['ruta'].rsplit('/', 1)[1] }}</code></td>
+    <td>{{ a['entregado_el'][8:10] }}/{{ a['entregado_el'][5:7] }} {{ a['entregado_el'][11:16] }}</td>
+    <td><a class="boton suave" href="{{ url_for('albaran_pdf', aid=a['id']) }}">PDF</a></td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

@@ -102,7 +102,9 @@ configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a
   <td><span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span>
       {% if a['entrega_nota'] %}<div class="mini">{{ a['entrega_nota'] }}</div>{% endif %}</td>
   <td>
-    {% if a['estado'] == 'pendiente_entrega' %}
+    {% if a['estado'] == 'pendiente_entrega' and a['modo_entrega'] == 'portal' %}
+      <a class="boton" href="{{ url_for('portal', cid=a['cliente_id']) }}">Subir al portal</a>
+    {% elif a['estado'] == 'pendiente_entrega' %}
       <form class="linea" method="post" action="{{ url_for('albaran_entregar', aid=a['id']) }}">
         <button class="boton">Entregar ({{ a['modo_entrega'] }})</button></form>
       <form class="linea" method="post" action="{{ url_for('albaran_marcar', aid=a['id']) }}">
