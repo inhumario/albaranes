@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.5.0'
+VERSION = '0.5.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -467,6 +467,10 @@ def nombre_carpeta(nivel: int, slug: str, nombres_cliente: dict) -> str:
     return slug
 
 
+SIN_ENVIAR = ('colocado', 'pendiente_entrega', 'revisar')
+FILTROS = {'todos': None, 'enviados': ('entregado',), 'sin-enviar': SIN_ENVIAR}
+
+
 @app.route('/albaranes')
 @app.route('/albaranes/<path:carpeta>')
 @requiere_acceso
@@ -474,6 +478,9 @@ def albaranes(carpeta=''):
     """Archivo navegable por carpetas, igual que queda en disco:
     cliente / año / mes / número.pdf. Con búsqueda, lista plana de resultados."""
     q = request.args.get('q', '').strip()
+    ver = request.args.get('ver', 'todos')
+    if ver not in FILTROS:
+        ver = 'todos'
     carpeta = carpeta.strip('/')
     with db() as con:
         nombres_cliente = {procesador.normaliza(c['nombre']): c['nombre']
@@ -484,25 +491,33 @@ def albaranes(carpeta=''):
                 'LEFT JOIN clientes c ON c.id=a.cliente_id '
                 'WHERE a.numero LIKE ? OR c.nombre LIKE ? OR a.emisor LIKE ? '
                 'ORDER BY a.id DESC LIMIT 500', [f'%{q}%'] * 3).fetchall()
-            return render_template('albaranes.html', q=q, resultados=filas,
-                                   migas=[], carpetas=[], ficheros=[], carpeta='')
+            return render_template('albaranes.html', q=q, resultados=filas, migas=[],
+                                   carpetas=[], ficheros=[], carpeta='', ver='todos', cuenta={})
         prefijo = 'archivo/' + (carpeta + '/' if carpeta else '')
         filas = con.execute(
             'SELECT a.*, c.nombre AS cliente FROM albaranes a '
             'LEFT JOIN clientes c ON c.id=a.cliente_id WHERE a.ruta LIKE ? '
             'ORDER BY a.ruta', (prefijo + '%',)).fetchall()
     nivel = len(carpeta.split('/')) if carpeta else 0
+    cuenta = {'todos': len(filas),
+              'enviados': sum(a['estado'] == 'entregado' for a in filas),
+              'sin-enviar': sum(a['estado'] in SIN_ENVIAR for a in filas)}
     subcarpetas, ficheros = {}, []
     for a in filas:
         resto = a['ruta'][len(prefijo):]
         if '/' in resto:
             nombre = resto.split('/', 1)[0]
-            c = subcarpetas.setdefault(nombre, {'slug': nombre, 'n': 0, 'sin_enviar': 0, 'ultimo': ''})
+            c = subcarpetas.setdefault(nombre, {'slug': nombre, 'n': 0, 'sin_enviar': 0,
+                                                'enviados': 0, 'ultimo': ''})
             c['n'] += 1
-            c['sin_enviar'] += a['estado'] in ('colocado', 'pendiente_entrega', 'revisar')
+            c['sin_enviar'] += a['estado'] in SIN_ENVIAR
+            c['enviados'] += a['estado'] == 'entregado'
             c['ultimo'] = max(c['ultimo'], a['creado'])
-        else:
+        elif not FILTROS[ver] or a['estado'] in FILTROS[ver]:
             ficheros.append(a)
+    if FILTROS[ver]:  # con filtro, fuera las carpetas que no tienen nada de eso
+        clave = 'enviados' if ver == 'enviados' else 'sin_enviar'
+        subcarpetas = {k: c for k, c in subcarpetas.items() if c[clave]}
     carpetas = sorted(subcarpetas.values(), key=lambda c: c['slug'], reverse=nivel > 0)
     for c in carpetas:
         c['nombre'] = nombre_carpeta(nivel, c['slug'], nombres_cliente)
@@ -511,7 +526,8 @@ def albaranes(carpeta=''):
     migas = [{'nombre': nombre_carpeta(i, parte, nombres_cliente),
               'ruta': '/'.join(partes[:i + 1])} for i, parte in enumerate(partes)]
     return render_template('albaranes.html', q='', resultados=None, migas=migas,
-                           carpetas=carpetas, ficheros=ficheros, carpeta=carpeta)
+                           carpetas=carpetas, ficheros=ficheros, carpeta=carpeta,
+                           ver=ver, cuenta=cuenta)
 
 
 @app.route('/zip/<path:carpeta>')

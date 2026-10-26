@@ -84,6 +84,19 @@ a{color:var(--sub)}
 .carpeta-t .icono{font-size:1.8rem;line-height:1}
 .carpeta-t .titulo{font-weight:700;color:var(--titulo)}
 .carpeta-t.roja .titulo{color:var(--rojo)}
+.filtros{display:flex;gap:.5rem;flex-wrap:wrap;margin:0 0 .8rem}
+.filtro{padding:.35rem .8rem;border:1px solid var(--borde);border-radius:99px;background:#fff;
+        text-decoration:none;color:var(--texto);font-size:.9rem}
+.filtro span{font-weight:700;margin-left:.2rem}
+.filtro.activo{background:var(--sub);border-color:var(--sub);color:#fff}
+.marca-envio{display:inline-block;font-size:.78rem;padding:.05rem .5rem;border-radius:99px;margin:.25rem .25rem 0 0}
+.marca-envio.si{background:var(--cab);color:var(--titulo)}
+.marca-envio.no{background:var(--aviso-f);color:var(--aviso)}
+.envio{font-size:.82rem;font-weight:600;margin-top:.3rem;padding:.25rem .45rem;border-radius:5px}
+.envio.si{background:var(--cab);color:var(--titulo)}
+.envio.no{background:var(--aviso-f);color:var(--aviso)}
+.envio.no .mini{font-weight:400}
+.envio.archivo{background:var(--zebra);color:#5a6d63;font-weight:400}
 .cab-archivo{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-bottom:.4rem}
 .cab-archivo h1{margin:.4rem 0}
 .cab-archivo .boton{margin-left:auto}

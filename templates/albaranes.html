@@ -19,6 +19,15 @@
 </div>
 {% endif %}
 
+{% if not q %}
+<div class="filtros">
+  {% for clave, texto in (('todos', 'Todos'), ('enviados', '✓ Enviados'), ('sin-enviar', '⏳ Sin enviar')) %}
+  <a class="filtro {{ 'activo' if ver == clave }} {{ clave }}"
+     href="{{ url_for('albaranes', carpeta=carpeta or None, ver=None if clave == 'todos' else clave) }}">{{ texto }} <span>{{ cuenta.get(clave, 0) }}</span></a>
+  {% endfor %}
+</div>
+{% endif %}
+
 <form method="get" action="{{ url_for('albaranes') }}" style="margin-bottom:1rem">
   <input type="search" name="q" value="{{ q }}" placeholder="Buscar un albarán por número, cliente o emisor…">
 </form>
@@ -45,11 +54,13 @@
   {% if carpetas %}
   <div class="carpetas">
   {% for c in carpetas %}
-    <a class="carpeta-t {{ 'roja' if c['slug']=='REVISAR' }}" href="{{ url_for('albaranes', carpeta=c['ruta']) }}">
+    <a class="carpeta-t {{ 'roja' if c['slug']=='REVISAR' }}" href="{{ url_for('albaranes', carpeta=c['ruta'], ver=None if ver == 'todos' else ver) }}">
       <span class="icono">{{ '⚠️' if c['slug']=='REVISAR' else '📁' }}</span>
       <span>
         <span class="titulo">{{ c['nombre'] }}</span><br>
-        <span class="mini">{{ c['n'] }} {{ 'albaranes' if c['n'] != 1 else 'albarán' }}{% if c['sin_enviar'] %} · {{ c['sin_enviar'] }} sin enviar{% endif %}</span>
+        <span class="mini">{{ c['n'] }} {{ 'albaranes' if c['n'] != 1 else 'albarán' }}</span><br>
+        {% if c['sin_enviar'] %}<span class="marca-envio no">⏳ {{ c['sin_enviar'] }} sin enviar</span>{% endif %}
+        {% if c['enviados'] %}<span class="marca-envio si">✓ {{ 'todo enviado' if c['enviados'] == c['n'] else c['enviados'] ~ (' enviados' if c['enviados'] > 1 else ' enviado') }}</span>{% endif %}
       </span>
     </a>
   {% endfor %}
@@ -63,8 +74,18 @@
       <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
       <div class="pie">
         <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
-        <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · {{ a['creado'][8:10] }}/{{ a['creado'][5:7] }}</div>
-        <span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span>
+        <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · escaneado {{ a['creado'][8:10] }}/{{ a['creado'][5:7] }}</div>
+        {% if a['estado'] == 'entregado' %}
+          <div class="envio si">✓ Enviado{% if a['entregado_el'] %} el {{ a['entregado_el'][8:10] }}/{{ a['entregado_el'][5:7] }} a las {{ a['entregado_el'][11:16] }}{% endif %}</div>
+        {% elif a['estado'] == 'colocado' %}
+          <div class="envio no">⏳ Sin enviar · <a href="{{ url_for('revision') }}">en Revisión</a></div>
+        {% elif a['estado'] == 'pendiente_entrega' %}
+          <div class="envio no">⏳ Sin enviar{% if a['entrega_nota'] %}<span class="mini"> · {{ a['entrega_nota'] }}</span>{% endif %}</div>
+        {% elif a['estado'] == 'revisar' %}
+          <div class="envio no">⚠️ Para revisar · <a href="{{ url_for('revision') }}">colocar</a></div>
+        {% else %}
+          <div class="envio archivo">Solo archivo (este cliente no recibe envío)</div>
+        {% endif %}
       </div>
     </div>
   {% endfor %}
@@ -72,7 +93,7 @@
   {% endif %}
 
   {% if not carpetas and not ficheros %}
-  <div class="aviso">{% if carpeta %}Esta carpeta está vacía.{% else %}Todavía no hay nada archivado. Sube un escaneo desde el <a href="{{ url_for('index') }}">Panel</a>.{% endif %}</div>
+  <div class="aviso">{% if ver != 'todos' %}No hay albaranes {{ 'enviados' if ver == 'enviados' else 'sin enviar' }} aquí.{% elif carpeta %}Esta carpeta está vacía.{% else %}Todavía no hay nada archivado. Sube un escaneo desde el <a href="{{ url_for('index') }}">Panel</a>.{% endif %}</div>
   {% endif %}
 {% endif %}
 {% endblock %}
