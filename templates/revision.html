@@ -71,7 +71,7 @@
 <div class="carpeta">
   <div class="carpeta-cab">
     <span class="ruta">📁 {{ carpeta }}</span>
-    <span class="destino">{{ g['albaranes']|length }} albarán{{ 'es' if g['albaranes']|length > 1 }} · {{ g['cliente'] or 'sin cliente' }} → {{ g['destino'] }}</span>
+    <span class="destino">{{ g['albaranes']|length }} {{ 'albaranes' if g['albaranes']|length > 1 else 'albarán' }} · {{ g['cliente'] or 'sin cliente' }} → {{ g['destino'] }}</span>
     <form method="post" action="{{ url_for('revision_enviar') }}"
           onsubmit="return confirm('¿Enviar los {{ g['albaranes']|length }} albaranes de {{ carpeta }}?')">
       <input type="hidden" name="carpeta" value="{{ carpeta }}">
