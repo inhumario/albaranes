@@ -67,8 +67,30 @@ label{display:block;margin:.8rem 0 .25rem;color:var(--sub);font-weight:600;font-
 .boton:disabled{opacity:.45;cursor:default}
 a{color:var(--sub)}
 .mini{font-size:.82rem;color:#5a6d63}
+.rejilla{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.8rem;padding:.9rem}
+.doc{border:1px solid var(--borde);border-radius:8px;background:var(--fondo);overflow:hidden;display:flex;flex-direction:column}
+.doc img{width:100%;aspect-ratio:210/297;object-fit:cover;object-position:top;border-bottom:1px solid var(--borde);background:#fff}
+.doc .pie{padding:.45rem .55rem;font-size:.85rem}
+.doc .nombre{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo);word-break:break-all}
+.doc details summary{cursor:pointer;color:var(--sub);font-size:.8rem;margin-top:.2rem}
+.doc details input,.doc details select{font-size:.85rem;padding:.3rem .4rem;margin-top:.3rem}
+.doc details .boton{margin-top:.4rem;padding:.3rem .6rem;font-size:.82rem}
+.migas{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;font-size:.95rem;margin:-.4rem 0 1rem}
+.migas a{text-decoration:none}.migas .sep{color:#9bb3a6}
+.carpetas{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:.7rem;margin-bottom:1.2rem}
+.carpeta-t{display:flex;gap:.7rem;align-items:center;background:#fff;border:1px solid var(--borde);border-radius:8px;
+           padding:.75rem .9rem;text-decoration:none;color:var(--texto);transition:all .15s}
+.carpeta-t:hover{border-color:var(--filete);background:var(--cab)}
+.carpeta-t .icono{font-size:1.8rem;line-height:1}
+.carpeta-t .titulo{font-weight:700;color:var(--titulo)}
+.carpeta-t.roja .titulo{color:var(--rojo)}
+.cab-archivo{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-bottom:.4rem}
+.cab-archivo h1{margin:.4rem 0}
+.cab-archivo .boton{margin-left:auto}
 @media (max-width:640px){
   main{padding:0.8rem 16px 2rem}
+  .rejilla{grid-template-columns:repeat(2,1fr);gap:.6rem;padding:.6rem}
+  .carpetas{grid-template-columns:1fr 1fr}
   h1{font-size:1.25rem}
   th,td{padding:.4rem .45rem;font-size:.85rem}
 }
@@ -80,7 +102,7 @@ a{color:var(--sub)}
   <nav>
     <a href="{{ url_for('index') }}" class="{{ 'activo' if request.endpoint=='index' }}">Panel</a>
     <a href="{{ url_for('revision') }}" class="{{ 'activo' if request.endpoint=='revision' }}">Revisión</a>
-    <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint=='albaranes' }}">Archivo</a>
+    <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint in ('albaranes','carpeta_zip') }}">Archivo</a>
     <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint and request.endpoint.startswith('cliente') }}">Clientes</a>
     <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint=='ajustes' }}">Ajustes</a>
   </nav>

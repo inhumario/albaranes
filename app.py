@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.4.2'
+VERSION = '0.5.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -454,20 +454,84 @@ def albaran_miniatura(aid):
     return send_file(png, max_age=3600)
 
 
+MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+         'septiembre', 'octubre', 'noviembre', 'diciembre']
+
+
+def nombre_carpeta(nivel: int, slug: str, nombres_cliente: dict) -> str:
+    """Nombre legible de una carpeta del archivo (cliente / año / mes)."""
+    if nivel == 0:
+        return {'REVISAR': 'Para revisar'}.get(slug, nombres_cliente.get(slug, slug))
+    if nivel == 2 and slug.isdigit() and 1 <= int(slug) <= 12:
+        return f'{slug} · {MESES[int(slug) - 1]}'
+    return slug
+
+
 @app.route('/albaranes')
+@app.route('/albaranes/<path:carpeta>')
 @requiere_acceso
-def albaranes():
+def albaranes(carpeta=''):
+    """Archivo navegable por carpetas, igual que queda en disco:
+    cliente / año / mes / número.pdf. Con búsqueda, lista plana de resultados."""
     q = request.args.get('q', '').strip()
-    sql = ('SELECT a.*, c.nombre AS cliente FROM albaranes a '
-           'LEFT JOIN clientes c ON c.id=a.cliente_id')
-    args = []
-    if q:
-        sql += ' WHERE a.numero LIKE ? OR c.nombre LIKE ? OR a.emisor LIKE ?'
-        args = [f'%{q}%'] * 3
-    sql += ' ORDER BY a.id DESC LIMIT 500'
+    carpeta = carpeta.strip('/')
     with db() as con:
-        filas = con.execute(sql, args).fetchall()
-    return render_template('albaranes.html', filas=filas, q=q)
+        nombres_cliente = {procesador.normaliza(c['nombre']): c['nombre']
+                           for c in con.execute('SELECT nombre FROM clientes')}
+        if q:
+            filas = con.execute(
+                'SELECT a.*, c.nombre AS cliente FROM albaranes a '
+                'LEFT JOIN clientes c ON c.id=a.cliente_id '
+                'WHERE a.numero LIKE ? OR c.nombre LIKE ? OR a.emisor LIKE ? '
+                'ORDER BY a.id DESC LIMIT 500', [f'%{q}%'] * 3).fetchall()
+            return render_template('albaranes.html', q=q, resultados=filas,
+                                   migas=[], carpetas=[], ficheros=[], carpeta='')
+        prefijo = 'archivo/' + (carpeta + '/' if carpeta else '')
+        filas = con.execute(
+            'SELECT a.*, c.nombre AS cliente FROM albaranes a '
+            'LEFT JOIN clientes c ON c.id=a.cliente_id WHERE a.ruta LIKE ? '
+            'ORDER BY a.ruta', (prefijo + '%',)).fetchall()
+    nivel = len(carpeta.split('/')) if carpeta else 0
+    subcarpetas, ficheros = {}, []
+    for a in filas:
+        resto = a['ruta'][len(prefijo):]
+        if '/' in resto:
+            nombre = resto.split('/', 1)[0]
+            c = subcarpetas.setdefault(nombre, {'slug': nombre, 'n': 0, 'sin_enviar': 0, 'ultimo': ''})
+            c['n'] += 1
+            c['sin_enviar'] += a['estado'] in ('colocado', 'pendiente_entrega', 'revisar')
+            c['ultimo'] = max(c['ultimo'], a['creado'])
+        else:
+            ficheros.append(a)
+    carpetas = sorted(subcarpetas.values(), key=lambda c: c['slug'], reverse=nivel > 0)
+    for c in carpetas:
+        c['nombre'] = nombre_carpeta(nivel, c['slug'], nombres_cliente)
+        c['ruta'] = (carpeta + '/' if carpeta else '') + c['slug']
+    partes = carpeta.split('/') if carpeta else []
+    migas = [{'nombre': nombre_carpeta(i, parte, nombres_cliente),
+              'ruta': '/'.join(partes[:i + 1])} for i, parte in enumerate(partes)]
+    return render_template('albaranes.html', q='', resultados=None, migas=migas,
+                           carpetas=carpetas, ficheros=ficheros, carpeta=carpeta)
+
+
+@app.route('/zip/<path:carpeta>')
+@requiere_acceso
+def carpeta_zip(carpeta):
+    """Descarga una carpeta del archivo entera en un ZIP, con la misma estructura."""
+    import io
+    import zipfile
+    carpeta = carpeta.strip('/')
+    base = (ARCHIVO / carpeta).resolve()
+    if not base.is_dir() or ARCHIVO.resolve() not in base.parents:
+        flash('Esa carpeta no existe.')
+        return redirect(url_for('albaranes'))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(base.rglob('*.pdf')):
+            z.write(f, f.relative_to(ARCHIVO.resolve()))
+    buf.seek(0)
+    return send_file(buf, mimetype='application/zip',
+                     download_name=carpeta.replace('/', '-') + '.zip', as_attachment=True)
 
 
 @app.route('/albaran/<int:aid>/pdf')

@@ -1,23 +1,78 @@
 {% extends 'base.html' %}
 {% block titulo %}Archivo — Albaranes{% endblock %}
 {% block cuerpo %}
-<h1>Archivo</h1>
-<form method="get" style="margin-bottom:1rem">
-  <input type="search" name="q" value="{{ q }}" placeholder="Buscar por número, cliente o emisor…">
+<div class="cab-archivo">
+  <h1>Archivo</h1>
+  {% if carpeta and (carpetas or ficheros) %}
+  <a class="boton suave" href="{{ url_for('carpeta_zip', carpeta=carpeta) }}">⬇ Descargar esta carpeta (.zip)</a>
+  {% endif %}
+</div>
+
+{% if not q %}
+<nav class="migas">
+  <a href="{{ url_for('albaranes') }}">📦 Archivo</a>
+  {% for m in migas %}
+    <span class="sep">›</span>
+    {% if loop.last %}<strong>{{ m['nombre'] }}</strong>
+    {% else %}<a href="{{ url_for('albaranes', carpeta=m['ruta']) }}">{{ m['nombre'] }}</a>{% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+
+<form method="get" action="{{ url_for('albaranes') }}" style="margin-bottom:1rem">
+  <input type="search" name="q" value="{{ q }}" placeholder="Buscar un albarán por número, cliente o emisor…">
 </form>
-<div class="tabla-scroll"><table>
-<tr><th>Nº albarán</th><th>Cliente</th><th>Fecha</th><th>Pág.</th><th>Estado</th><th></th></tr>
-{% for a in filas %}
-<tr>
-  <td><strong>{{ a['numero'] or '(sin número)' }}</strong></td>
-  <td>{{ a['cliente'] or a['emisor'] or '—' }}</td>
-  <td>{{ a['creado'][:10] }}</td>
-  <td>{{ a['paginas'] }}</td>
-  <td><span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span></td>
-  <td><a class="boton suave" href="{{ url_for('albaran_pdf', aid=a['id']) }}">PDF</a></td>
-</tr>
+
+{% if resultados is not none %}
+  <p class="mini">{{ resultados|length }} resultado(s) para «{{ q }}» · <a href="{{ url_for('albaranes') }}">volver a las carpetas</a></p>
+  <div class="tabla-scroll"><table>
+  <tr><th>Nº albarán</th><th>Carpeta</th><th>Pág.</th><th>Estado</th><th></th></tr>
+  {% for a in resultados %}
+  {% set dir = a['ruta'][8:].rsplit('/', 1)[0] %}
+  <tr>
+    <td><strong>{{ a['numero'] or '(sin número)' }}</strong></td>
+    <td><a href="{{ url_for('albaranes', carpeta=dir) }}">{{ dir }}/</a></td>
+    <td>{{ a['paginas'] }}</td>
+    <td><span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span></td>
+    <td><a class="boton suave" href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank">PDF</a></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="5" class="mini">Sin resultados.</td></tr>
+  {% endfor %}
+  </table></div>
 {% else %}
-<tr><td colspan="6" class="mini">Sin resultados.</td></tr>
-{% endfor %}
-</table></div>
+
+  {% if carpetas %}
+  <div class="carpetas">
+  {% for c in carpetas %}
+    <a class="carpeta-t {{ 'roja' if c['slug']=='REVISAR' }}" href="{{ url_for('albaranes', carpeta=c['ruta']) }}">
+      <span class="icono">{{ '⚠️' if c['slug']=='REVISAR' else '📁' }}</span>
+      <span>
+        <span class="titulo">{{ c['nombre'] }}</span><br>
+        <span class="mini">{{ c['n'] }} {{ 'albaranes' if c['n'] != 1 else 'albarán' }}{% if c['sin_enviar'] %} · {{ c['sin_enviar'] }} sin enviar{% endif %}</span>
+      </span>
+    </a>
+  {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if ficheros %}
+  <div class="rejilla" style="padding:0">
+  {% for a in ficheros %}
+    <div class="doc">
+      <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
+      <div class="pie">
+        <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
+        <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · {{ a['creado'][8:10] }}/{{ a['creado'][5:7] }}</div>
+        <span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not carpetas and not ficheros %}
+  <div class="aviso">{% if carpeta %}Esta carpeta está vacía.{% else %}Todavía no hay nada archivado. Sube un escaneo desde el <a href="{{ url_for('index') }}">Panel</a>.{% endif %}</div>
+  {% endif %}
+{% endif %}
 {% endblock %}

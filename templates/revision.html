@@ -13,14 +13,6 @@
 .carpeta-cab .ruta{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo)}
 .carpeta-cab .destino{font-size:.88rem;color:var(--sub)}
 .carpeta-cab form{margin-left:auto}
-.rejilla{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.8rem;padding:.9rem}
-.doc{border:1px solid var(--borde);border-radius:8px;background:var(--fondo);overflow:hidden;display:flex;flex-direction:column}
-.doc img{width:100%;aspect-ratio:210/297;object-fit:cover;object-position:top;border-bottom:1px solid var(--borde);background:#fff}
-.doc .pie{padding:.45rem .55rem;font-size:.85rem}
-.doc .nombre{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo);word-break:break-all}
-.doc details summary{cursor:pointer;color:var(--sub);font-size:.8rem;margin-top:.2rem}
-.doc details input,.doc details select{font-size:.85rem;padding:.3rem .4rem;margin-top:.3rem}
-.doc details .boton{margin-top:.4rem;padding:.3rem .6rem;font-size:.82rem}
 .enviar-todo{position:sticky;bottom:0;background:var(--fondo);border-top:2px solid var(--filete);padding:.8rem 0;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
 .enviar-todo .boton{font-size:1rem;padding:.6rem 1.2rem}
 @media (max-width:640px){.rejilla{grid-template-columns:repeat(2,1fr);gap:.6rem;padding:.6rem}.carpeta-cab form{margin-left:0}}
@@ -70,7 +62,7 @@
 {% for carpeta, g in grupos.items() %}
 <div class="carpeta">
   <div class="carpeta-cab">
-    <span class="ruta">📁 {{ carpeta }}</span>
+    <a class="ruta" href="{{ url_for('albaranes', carpeta=carpeta.rstrip('/')) }}" style="text-decoration:none">📁 {{ carpeta }}</a>
     <span class="destino">{{ g['albaranes']|length }} {{ 'albaranes' if g['albaranes']|length > 1 else 'albarán' }} · {{ g['cliente'] or 'sin cliente' }} → {{ g['destino'] }}</span>
     <form method="post" action="{{ url_for('revision_enviar') }}"
           onsubmit="return confirm('¿Enviar los {{ g['albaranes']|length }} albaranes de {{ carpeta }}?')">
