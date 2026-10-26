@@ -50,8 +50,21 @@ input[type=text],input[type=search],select,textarea{
   width:100%;padding:.45rem .6rem;border:1px solid var(--borde);border-radius:6px;
   font-size:.95rem;background:#fff;color:var(--texto)}
 label{display:block;margin:.8rem 0 .25rem;color:var(--sub);font-weight:600;font-size:.9rem}
-.subida{border:2px dashed var(--borde);border-radius:10px;background:#fff;
-        padding:1.1rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+.subida{border:1px solid var(--borde);border-radius:10px;background:#fff;padding:1.1rem}
+.subida-cab{display:flex;gap:.8rem;align-items:baseline;flex-wrap:wrap;margin-bottom:.7rem}
+.zona{display:flex;flex-direction:column;align-items:center;gap:.25rem;text-align:center;margin:0;
+      border:2px dashed var(--borde);border-radius:10px;padding:1.4rem 1rem;cursor:pointer;
+      color:var(--texto);font-weight:400;font-size:.95rem;background:var(--fondo);transition:all .15s}
+.zona:hover,.zona.encima{border-color:var(--filete);background:var(--cab)}
+.zona-icono{font-size:1.7rem}
+.lista-ficheros{list-style:none;margin:.7rem 0 0;padding:0}
+.lista-ficheros li{display:flex;align-items:center;gap:.7rem;padding:.45rem .6rem;border:1px solid var(--borde);
+      border-radius:6px;margin-bottom:.35rem;background:var(--zebra)}
+.lista-ficheros .nombre-fichero{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.quitar{border:0;background:none;color:var(--rojo);font-size:1.35rem;line-height:1;cursor:pointer;padding:0 .3rem}
+.quitar:hover{background:var(--rojo-f);border-radius:4px}
+.subida-pie{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.8rem}
+.boton:disabled{opacity:.45;cursor:default}
 a{color:var(--sub)}
 .mini{font-size:.82rem;color:#5a6d63}
 @media (max-width:640px){

@@ -4,12 +4,84 @@
 {% if sin_smtp %}<div class="aviso">⚠ Hay clientes con entrega por email pero el SMTP no está
 configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a>.</div>{% endif %}
 
-<form class="subida" method="post" action="{{ url_for('subir') }}" enctype="multipart/form-data">
-  <strong>Subir escaneo</strong>
-  <span class="mini">la pila entera en un PDF, o varios PDF a la vez — el sistema separa, nombra y clasifica solo</span>
-  <input type="file" name="escaneo" accept="application/pdf" multiple required>
-  <button class="boton">Procesar</button>
+<form class="subida" id="subida" method="post" action="{{ url_for('subir') }}" enctype="multipart/form-data">
+  <div class="subida-cab">
+    <strong>Subir escaneo</strong>
+    <span class="mini">la pila entera en un PDF, o varios PDF a la vez — el sistema separa, nombra y clasifica solo</span>
+  </div>
+  <label class="zona" id="zona" for="ficheros">
+    <span class="zona-icono">📄</span>
+    <span><strong>Arrastra aquí los PDF</strong> o pulsa para elegirlos</span>
+    <span class="mini">puedes ir añadiendo más; se suman a la lista</span>
+  </label>
+  <input type="file" id="ficheros" name="escaneo" accept="application/pdf,.pdf" multiple hidden>
+  <ul class="lista-ficheros" id="lista"></ul>
+  <div class="subida-pie">
+    <button class="boton" id="procesar" disabled>Procesar</button>
+    <span class="mini" id="estado-subida"></span>
+  </div>
 </form>
+<script>
+(function () {
+  const form = document.getElementById('subida'), zona = document.getElementById('zona'),
+        input = document.getElementById('ficheros'), lista = document.getElementById('lista'),
+        boton = document.getElementById('procesar'), estado = document.getElementById('estado-subida');
+  let ficheros = [];
+  const tam = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+
+  function pintar() {
+    lista.innerHTML = '';
+    ficheros.forEach((f, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<span class="nombre-fichero"></span><span class="mini"></span>' +
+                     '<button type="button" class="quitar" title="Quitar" aria-label="Quitar">×</button>';
+      li.querySelector('.nombre-fichero').textContent = f.name;
+      li.querySelector('.mini').textContent = tam(f.size);
+      li.querySelector('.quitar').onclick = () => { ficheros.splice(i, 1); pintar(); };
+      lista.appendChild(li);
+    });
+    boton.disabled = !ficheros.length;
+    boton.textContent = ficheros.length > 1 ? 'Procesar ' + ficheros.length + ' ficheros' : 'Procesar';
+    estado.textContent = '';
+  }
+
+  function anadir(nuevos) {
+    let rechazados = 0;
+    for (const f of nuevos) {
+      if (!/\.pdf$/i.test(f.name)) { rechazados++; continue; }
+      if (!ficheros.some(x => x.name === f.name && x.size === f.size)) ficheros.push(f);
+    }
+    pintar();
+    if (rechazados) estado.textContent = rechazados + ' fichero(s) no son PDF y no se han añadido.';
+  }
+
+  input.addEventListener('change', () => { anadir(input.files); input.value = ''; });
+  ['dragenter', 'dragover'].forEach(ev => zona.addEventListener(ev, e => {
+    e.preventDefault(); zona.classList.add('encima'); }));
+  ['dragleave', 'drop'].forEach(ev => zona.addEventListener(ev, e => {
+    e.preventDefault(); zona.classList.remove('encima'); }));
+  zona.addEventListener('drop', e => anadir(e.dataTransfer.files));
+  // que soltar un fichero fuera de la zona no abra el PDF en el navegador
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => e.preventDefault());
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    if (!ficheros.length) return;
+    const datos = new FormData();
+    ficheros.forEach(f => datos.append('escaneo', f, f.name));
+    boton.disabled = true;
+    estado.textContent = 'Subiendo ' + ficheros.length + ' fichero(s)…';
+    try {
+      const r = await fetch(form.action, { method: 'POST', body: datos });
+      window.location = r.url;
+    } catch (err) {
+      estado.textContent = 'No se ha podido subir: ' + err.message + '. Vuelve a intentarlo.';
+      boton.disabled = false;
+    }
+  });
+})();
+</script>
 
 <div class="tarjetas">
   <div class="tarjeta"><div class="n">{{ contadores.get('archivado',0) + contadores.get('entregado',0) + contadores.get('pendiente_entrega',0) }}</div><div class="t">albaranes archivados</div></div>
