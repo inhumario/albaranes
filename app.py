@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.4.0'
+VERSION = '0.4.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'

@@ -64,10 +64,10 @@ DPI_CONTRASTE = 220
 
 
 def _pedir(datos: str, prompt: str, max_tokens: int = 300, modelo: str = MODELO) -> str:
-    # temperature=0 solo donde el modelo lo admite (Sonnet 5 lo rechaza como deprecado)
-    extra = {'temperature': 0} if modelo == MODELO else {}
+    # sin temperature: desde oct-2026 la API la rechaza también en Haiku («Extra inputs
+    # are not permitted»); la fiabilidad la da la lectura de contraste descorrelacionada
     resp = _api().messages.create(
-        model=modelo, max_tokens=max_tokens, extra_body=extra,
+        model=modelo, max_tokens=max_tokens,
         messages=[{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': datos}},
             {'type': 'text', 'text': prompt},
