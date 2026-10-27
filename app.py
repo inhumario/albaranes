@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.6.0'
+VERSION = '0.7.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -172,7 +172,7 @@ def login():
         if guardado and verifica_clave(request.form.get('clave', ''), guardado):
             session.permanent = True
             session['acceso'] = True
-            return redirect(request.args.get('siguiente') or url_for('index'))
+            return redirect(request.args.get('siguiente') or url_for('inicio'))
         flash('Contraseña incorrecta.')
     return render_template('login.html')
 
@@ -350,6 +350,38 @@ def aprobar(albaran_id: int, con: sqlite3.Connection) -> str:
 
 # ---------------------------------------------------------------------- rutas
 @app.route('/')
+@requiere_acceso
+def inicio():
+    """Pantalla de entrada tipo Odoo: un acceso por área, con su aviso si hay algo pendiente."""
+    with db() as con:
+        n = dict(con.execute('SELECT estado, COUNT(*) FROM albaranes GROUP BY estado').fetchall())
+        leyendo = con.execute("SELECT COUNT(*) FROM lotes WHERE estado='procesando'").fetchone()[0]
+        n_clientes = con.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
+    accesos = [
+        {'url': url_for('index'), 'nombre': 'Subir escaneo', 'icono': 'subir', 'color': 'coral',
+         'aviso': f'{leyendo} leyéndose' if leyendo else ''},
+        {'url': url_for('revision'), 'nombre': 'Revisión', 'icono': 'revision', 'color': 'azul',
+         'aviso': (f"{n.get('colocado', 0) + n.get('revisar', 0)} por revisar"
+                   if n.get('colocado', 0) + n.get('revisar', 0) else '')},
+        {'url': url_for('albaranes'), 'nombre': 'Archivo', 'icono': 'archivo', 'color': 'ambar',
+         'aviso': ''},
+        {'url': url_for('pendientes'), 'nombre': 'Por entregar', 'icono': 'entregar', 'color': 'violeta',
+         'aviso': f"{n.get('pendiente_entrega', 0)} sin entregar" if n.get('pendiente_entrega') else ''},
+        {'url': url_for('clientes'), 'nombre': 'Clientes', 'icono': 'clientes', 'color': 'verde',
+         'aviso': ''},
+        {'url': url_for('ajustes'), 'nombre': 'Ajustes', 'icono': 'ajustes', 'color': 'tinta',
+         'aviso': ''},
+    ]
+    return render_template('inicio.html', accesos=accesos, n_clientes=n_clientes)
+
+
+@app.route('/por-entregar')
+@requiere_acceso
+def pendientes():
+    return redirect(url_for('index') + '#pendientes')
+
+
+@app.route('/panel')
 @requiere_acceso
 def index():
     with db() as con:

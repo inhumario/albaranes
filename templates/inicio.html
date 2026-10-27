@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% block titulo %}Inicio · Albaranes · Inhumario{% endblock %}
+{% block cuerpo %}
+<style>
+body{background:linear-gradient(135deg,#F7F7F8 0%,#EEEEF1 55%,#FBEDED 100%) fixed}
+.inicio{max-width:860px;margin:4vh auto 0;text-align:center}
+.inicio .saludo{color:var(--gris);font-size:.95rem;margin-bottom:2.2rem}
+.lanzador{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:2rem 1rem;justify-items:center}
+.acceso{display:flex;flex-direction:column;align-items:center;gap:.7rem;text-decoration:none;color:var(--ink);
+        width:130px;position:relative}
+.acceso .baldosa{width:96px;height:96px;border-radius:16px;background:#fff;display:flex;align-items:center;
+        justify-content:center;box-shadow:0 1px 2px rgba(0,0,0,.08),0 6px 16px rgba(0,0,0,.06);transition:transform .12s,box-shadow .12s}
+.acceso:hover .baldosa{transform:translateY(-3px);box-shadow:0 2px 4px rgba(0,0,0,.08),0 12px 26px rgba(0,0,0,.10)}
+.acceso .nombre{font-size:1.02rem}
+.acceso .aviso-n{position:absolute;top:-8px;right:8px;background:var(--coral);color:var(--ink);font-size:.72rem;
+        font-weight:700;border-radius:999px;padding:2px 8px;box-shadow:0 2px 6px rgba(0,0,0,.12);white-space:nowrap}
+@media (max-width:640px){
+  .inicio{margin-top:2vh}
+  .lanzador{grid-template-columns:repeat(3,1fr);gap:1.4rem .4rem}
+  .acceso{width:100%}
+  .acceso .baldosa{width:74px;height:74px;border-radius:14px}
+  .acceso .baldosa svg{width:46px;height:46px}
+  .acceso .nombre{font-size:.86rem}
+  .acceso .aviso-n{right:2px;font-size:.66rem}
+}
+</style>
+{% set colores = {'coral':('#FF8080','#E96A6A'),'azul':('#4C8DF6','#2D6CDF'),'ambar':('#F6B544','#E8913A'),
+                  'violeta':('#8C6FC9','#5B4B8A'),'verde':('#35B07A','#1F7A50'),'tinta':('#4A4A4E','#111111')} %}
+<div class="inicio">
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="Inhumario" style="height:30px;margin:0 auto .6rem;display:block">
+  <div class="saludo">Albaranes · digitalización y entrega automática</div>
+  <div class="lanzador">
+  {% for a in accesos %}
+    {% set c1, c2 = colores[a.color] %}
+    <a class="acceso" href="{{ a.url }}">
+      {% if a.aviso %}<span class="aviso-n">{{ a.aviso }}</span>{% endif %}
+      <span class="baldosa">
+        <svg width="58" height="58" viewBox="0 0 64 64" aria-hidden="true">
+        {% if a.icono == 'subir' %}
+          <rect x="10" y="34" width="44" height="20" rx="5" fill="{{ c2 }}"/>
+          <path d="M32 8 L48 26 H38 V40 H26 V26 H16 Z" fill="{{ c1 }}"/>
+        {% elif a.icono == 'revision' %}
+          <rect x="8" y="10" width="34" height="44" rx="5" fill="{{ c1 }}"/>
+          <rect x="15" y="20" width="20" height="4" rx="2" fill="#fff" opacity=".9"/>
+          <rect x="15" y="29" width="14" height="4" rx="2" fill="#fff" opacity=".9"/>
+          <circle cx="41" cy="40" r="11" fill="none" stroke="{{ c2 }}" stroke-width="6"/>
+          <path d="M49 48 L58 57" stroke="{{ c2 }}" stroke-width="7" stroke-linecap="round"/>
+        {% elif a.icono == 'archivo' %}
+          <path d="M6 18 a5 5 0 0 1 5-5 h14 l5 6 h23 a5 5 0 0 1 5 5 v4 H6 Z" fill="{{ c2 }}"/>
+          <rect x="6" y="24" width="52" height="30" rx="5" fill="{{ c1 }}"/>
+        {% elif a.icono == 'entregar' %}
+          <path d="M6 30 L58 8 L44 56 L32 38 Z" fill="{{ c1 }}"/>
+          <path d="M32 38 L58 8 L28 34 Z" fill="{{ c2 }}"/>
+        {% elif a.icono == 'clientes' %}
+          <circle cx="23" cy="22" r="10" fill="{{ c2 }}"/>
+          <path d="M6 52 a17 15 0 0 1 34 0 Z" fill="{{ c2 }}"/>
+          <circle cx="43" cy="24" r="9" fill="{{ c1 }}"/>
+          <path d="M28 54 a15 14 0 0 1 30 0 Z" fill="{{ c1 }}"/>
+        {% else %}
+          <path d="M32 6 l6 6 8-2 2 8 8 2-2 8 6 6-6 6 2 8-8 2-2 8-8-2-6 6-6-6-8 2-2-8-8-2 2-8-6-6 6-6-2-8 8-2 2-8 8 2Z" fill="{{ c2 }}"/>
+          <circle cx="32" cy="32" r="10" fill="#FF8080"/>
+        {% endif %}
+        </svg>
+      </span>
+      <span class="nombre">{{ a.nombre }}</span>
+    </a>
+  {% endfor %}
+  </div>
+</div>
+{% endblock %}

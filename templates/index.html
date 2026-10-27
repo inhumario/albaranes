@@ -92,7 +92,7 @@ configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a
 </div>
 
 {% if pendientes %}
-<h2>Pendientes de entrega y revisión</h2>
+<h2 id="pendientes">Pendientes de entrega y revisión</h2>
 <div class="tabla-scroll"><table>
 <tr><th>Nº albarán</th><th>Cliente</th><th>Estado</th><th>Acción</th></tr>
 {% for a in pendientes %}

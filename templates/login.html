@@ -1,12 +1,22 @@
 {% extends 'base.html' %}
-{% block titulo %}Acceso — Albaranes{% endblock %}
+{% block titulo %}Acceso · Albaranes · Inhumario{% endblock %}
 {% block cuerpo %}
-<div style="max-width:360px;margin:12vh auto 0">
-  <h1 style="text-align:center">📦 Albaranes</h1>
-  <form method="post" class="tarjeta" style="padding:1.2rem">
-    <label>Contraseña</label>
-    <input type="password" name="clave" autofocus required>
-    <p style="margin-bottom:0"><button class="boton" style="width:100%">Entrar</button></p>
-  </form>
-</div>
+<style>
+body{background:linear-gradient(135deg,#F7F7F8 0%,#EEEEF1 55%,#FBEDED 100%) fixed}
+.acceso-caja{max-width:380px;margin:12vh auto 0;background:#fff;border:1px solid var(--borde);border-radius:14px;
+             padding:2rem 1.6rem 1.6rem;box-shadow:0 10px 30px rgba(0,0,0,.07);position:relative;overflow:hidden}
+.acceso-caja:before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:var(--coral)}
+.acceso-caja img{height:30px;display:block;margin:0 auto .4rem}
+.acceso-caja .app{text-align:center;color:var(--gris);margin-bottom:1.4rem}
+.acceso-caja .boton{width:100%;padding:.65rem;font-size:1rem}
+.pie-acceso{text-align:center;color:var(--gris);font-size:.8rem;margin-top:1rem}
+</style>
+<form method="post" class="acceso-caja">
+  <img src="{{ url_for('static', filename='logo.png') }}" alt="Inhumario">
+  <div class="app">Albaranes</div>
+  <label>Contraseña</label>
+  <input type="password" name="clave" autofocus required>
+  <p style="margin:1rem 0 0"><button class="boton">Entrar</button></p>
+</form>
+<p class="pie-acceso">inhumario.com</p>
 {% endblock %}

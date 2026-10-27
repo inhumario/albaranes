@@ -3,22 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block titulo %}Albaranes{% endblock %}</title>
+<title>{% block titulo %}Albaranes · Inhumario{% endblock %}</title>
+<link rel="icon" href="{{ url_for('static', filename='icon-square.png') }}">
 <style>
 :root{
-  --titulo:#0E4A31; --sub:#1F7A50; --filete:#35996A; --cab:#EAF4EE;
-  --zebra:#F5FAF7; --borde:#C9DED3; --texto:#1F2D26; --fondo:#FBFDFC;
-  --aviso:#8a5a00; --aviso-f:#fdf4e3; --rojo:#8a2020; --rojo-f:#fbecec;
+  /* identidad Inhumario (como el TMS): tinta, coral y gris */
+  --ink:#111111; --ink-3:#2C2C2E; --coral:#FF8080; --coral-d:#E96A6A; --coral-s:#FFF1F1; --gris:#969698;
+  --titulo:#111111; --sub:#2C2C2E; --filete:#FF8080; --cab:#F3F3F4;
+  --zebra:#FAFAFA; --borde:#E5E5E5; --texto:#111111; --fondo:#F5F5F6;
+  --aviso:#8a5a00; --aviso-f:#fff4e0; --rojo:#B23A3A; --rojo-f:#FDECEC;
 }
 *{box-sizing:border-box}
-body{margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+body{margin:0;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased;
      color:var(--texto);background:var(--fondo);line-height:1.55}
-header{background:var(--titulo);color:#fff;padding:.7rem 1rem;display:flex;
-       align-items:center;gap:1.2rem;flex-wrap:wrap}
-header .marca{font-weight:700;font-size:1.05rem}
-nav{display:flex;gap:.9rem;flex-wrap:wrap}
-nav a{color:#dcefe4;text-decoration:none;padding:.15rem 0;border-bottom:2px solid transparent}
-nav a.activo,nav a:hover{color:#fff;border-color:var(--filete)}
+.topbar{height:46px;background:var(--ink);color:#fff;display:flex;align-items:center;gap:6px;padding:0 10px;
+        position:sticky;top:0;z-index:60}
+.topbar .apps{color:#fff;padding:8px;border-radius:6px;display:flex}
+.topbar .apps:hover{background:var(--ink-3)}
+.topbar .marca{display:flex;align-items:center;padding:0 6px}
+.topbar .marca img{height:17px;width:auto;display:block}
+.topbar .sep{width:1px;height:20px;background:#3A3A3D;margin:0 4px}
+.topbar .mod{color:var(--coral);font-weight:700;font-size:14.5px;white-space:nowrap;text-decoration:none}
+.topbar nav{display:flex;align-items:center;gap:2px;overflow-x:auto;scrollbar-width:none;flex:1}
+.topbar nav::-webkit-scrollbar{display:none}
+.topbar nav a{color:#D8D8DA;padding:6px 10px;border-radius:6px;font-size:13.5px;white-space:nowrap;text-decoration:none}
+.topbar nav a:hover{background:var(--ink-3);color:#fff}
+.topbar nav a.activo{background:var(--ink-3);color:#fff;font-weight:600}
+.topbar .salir{color:#9C9CA0;font-size:12.5px;padding:6px 8px;border-radius:6px;text-decoration:none;margin-left:auto;white-space:nowrap}
+.topbar .salir:hover{background:var(--ink-3);color:#fff}
 main{max-width:1000px;margin:0 auto;padding:1.2rem 16px 3rem}
 h1{color:var(--titulo);font-size:1.45rem;margin:.4rem 0 1rem}
 h2{color:var(--sub);font-size:1.1rem;margin:1.6rem 0 .6rem}
@@ -36,14 +48,14 @@ td{padding:.45rem .6rem;border-bottom:1px solid var(--borde)}
 tr:nth-child(even) td{background:var(--zebra)}
 .pill{display:inline-block;padding:.05rem .55rem;border-radius:99px;font-size:.8rem;white-space:nowrap}
 .pill.archivado{background:var(--cab);color:var(--titulo)}
-.pill.entregado{background:var(--filete);color:#fff}
+.pill.entregado{background:#E4F3EB;color:#1F7A50}
 .pill.pendiente_entrega{background:var(--aviso-f);color:var(--aviso)}
 .pill.revisar,.pill.error{background:var(--rojo-f);color:var(--rojo)}
 .pill.procesando{background:var(--zebra);color:var(--sub)}
 .pill.colocado{background:#e6f0fb;color:#1d4f86}
-.boton{background:var(--sub);color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;
+.boton{background:var(--coral);color:var(--ink);font-weight:600;border:0;border-radius:6px;padding:.45rem .9rem;
        font-size:.92rem;cursor:pointer;text-decoration:none;display:inline-block}
-.boton:hover{background:var(--titulo)}
+.boton:hover{background:var(--coral-d);color:var(--ink)}
 .boton.suave{background:var(--cab);color:var(--titulo);border:1px solid var(--borde)}
 form.linea{display:inline}
 input[type=text],input[type=search],select,textarea{
@@ -65,7 +77,8 @@ label{display:block;margin:.8rem 0 .25rem;color:var(--sub);font-weight:600;font-
 .quitar:hover{background:var(--rojo-f);border-radius:4px}
 .subida-pie{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.8rem}
 .boton:disabled{opacity:.45;cursor:default}
-a{color:var(--sub)}
+a{color:var(--ink)}
+main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--coral);text-underline-offset:2px}
 .mini{font-size:.82rem;color:#5a6d63}
 .rejilla{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.8rem;padding:.9rem}
 .doc{border:1px solid var(--borde);border-radius:8px;background:var(--fondo);overflow:hidden;display:flex;flex-direction:column}
@@ -88,12 +101,12 @@ a{color:var(--sub)}
 .filtro{padding:.35rem .8rem;border:1px solid var(--borde);border-radius:99px;background:#fff;
         text-decoration:none;color:var(--texto);font-size:.9rem}
 .filtro span{font-weight:700;margin-left:.2rem}
-.filtro.activo{background:var(--sub);border-color:var(--sub);color:#fff}
+.filtro.activo{background:var(--ink);border-color:var(--ink);color:#fff}
 .marca-envio{display:inline-block;font-size:.78rem;padding:.05rem .5rem;border-radius:99px;margin:.25rem .25rem 0 0}
-.marca-envio.si{background:var(--cab);color:var(--titulo)}
+.marca-envio.si{background:#E4F3EB;color:#1F7A50}
 .marca-envio.no{background:var(--aviso-f);color:var(--aviso)}
 .envio{font-size:.82rem;font-weight:600;margin-top:.3rem;padding:.25rem .45rem;border-radius:5px}
-.envio.si{background:var(--cab);color:var(--titulo)}
+.envio.si{background:#E4F3EB;color:#1F7A50}
 .envio.no{background:var(--aviso-f);color:var(--aviso)}
 .envio.no .mini{font-weight:400}
 .envio.archivo{background:var(--zebra);color:#5a6d63;font-weight:400}
@@ -110,17 +123,29 @@ a{color:var(--sub)}
 </style>
 </head>
 <body>
-<header>
-  <span class="marca">📦 Albaranes</span>
+{% if session.get('acceso') %}
+{% set modulos = {'index':'Subir escaneo','revision':'Revisión','albaranes':'Archivo','carpeta_zip':'Archivo',
+                  'clientes':'Clientes','cliente_form':'Clientes','portal':'Clientes','ajustes':'Ajustes'} %}
+<header class="topbar">
+  <a class="apps" href="{{ url_for('inicio') }}" title="Inicio">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
+      {% for y in (2,8,14) %}{% for x in (2,8,14) %}<rect x="{{ x }}" y="{{ y }}" width="3" height="3" rx=".8"/>{% endfor %}{% endfor %}
+    </svg></a>
+  <a class="marca" href="{{ url_for('inicio') }}"><img src="{{ url_for('static', filename='logo-white.png') }}" alt="Inhumario"></a>
+  <span class="sep"></span>
+  <a class="mod" href="{{ url_for('inicio') }}">{{ modulos.get(request.endpoint, 'Albaranes') }}</a>
+  {% if request.endpoint != 'inicio' %}
   <nav>
-    <a href="{{ url_for('index') }}" class="{{ 'activo' if request.endpoint=='index' }}">Panel</a>
-    <a href="{{ url_for('revision') }}" class="{{ 'activo' if request.endpoint=='revision' }}">Revisión</a>
-    <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint in ('albaranes','carpeta_zip') }}">Archivo</a>
-    <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint and request.endpoint.startswith('cliente') }}">Clientes</a>
-    <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint=='ajustes' }}">Ajustes</a>
+      <a href="{{ url_for('index') }}" class="{{ 'activo' if request.endpoint in ('index',) }}">Subir escaneo</a>
+      <a href="{{ url_for('revision') }}" class="{{ 'activo' if request.endpoint in ('revision',) }}">Revisión</a>
+      <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint in ('albaranes','carpeta_zip') }}">Archivo</a>
+      <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint in ('clientes','cliente_form','portal') }}">Clientes</a>
+      <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint in ('ajustes',) }}">Ajustes</a>
   </nav>
-  {% if session.get('acceso') %}<a href="{{ url_for('salir') }}" style="margin-left:auto;color:#dcefe4;text-decoration:none;font-size:.85rem">Salir</a>{% endif %}
+  {% endif %}
+  <a class="salir" href="{{ url_for('salir') }}">Salir</a>
 </header>
+{% endif %}
 <main>
 {% with mensajes = get_flashed_messages() %}
   {% for m in mensajes %}<div class="aviso">{{ m }}</div>{% endfor %}
