@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.8.3'
+VERSION = '0.9.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -1004,8 +1004,79 @@ def ajustes():
         smtp = {c: cfg_get(con, c) for c in CLAVES_SMTP}
         hay_clave = bool(cfg_get(con, 'clave_hash'))
         revisar_antes = cfg_get(con, 'revisar_antes') == '1'
-    return render_template('ajustes.html', smtp=smtp, hay_clave=hay_clave, version=VERSION,
+        repaso = json.loads(cfg_get(con, 'repaso') or '{}')
+    return render_template('ajustes.html', repaso=repaso, smtp=smtp, hay_clave=hay_clave, version=VERSION,
                            revisar_antes=revisar_antes)
+
+
+def repasar_todo() -> None:
+    """Relee todos los albaranes ya subidos con el lector actual (número con triple lectura y
+    fecha de carga): recoloca en su año/mes los que estén mal y manda a revisar los números
+    que no se confirmen. Lo entregado no se mueve: solo se informa."""
+    import tempfile
+    from concurrent.futures import ThreadPoolExecutor
+    with db() as con:
+        filas = [dict(r) for r in con.execute(
+            'SELECT a.*, c.nombre AS cliente FROM albaranes a LEFT JOIN clientes c '
+            'ON c.id=a.cliente_id ORDER BY a.id')]
+        cfg_set(con, 'repaso', json.dumps({'estado': 'leyendo', 'hechas': 0, 'total': len(filas),
+                                           'inicio': datetime.now().isoformat(timespec='seconds')}))
+
+    def leer(a):
+        pdf = DATA / a['ruta']
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(['pdftoppm', '-r', str(procesador.DPI), '-png', '-singlefile', '-f', '1',
+                            '-l', '1', str(pdf), f'{tmp}/p'], check=True)
+            return procesador._analizar_pagina(Path(f'{tmp}/p.png'), pdf, 0)
+    with ThreadPoolExecutor(max_workers=procesador.LECTURAS_A_LA_VEZ) as ex:
+        lecturas = list(ex.map(leer, filas))
+
+    cambios = []
+    with db() as con:
+        for a, info in zip(filas, lecturas):
+            nombre_actual = Path(a['ruta']).name
+            seguro = info.get('numero') and info.get('confianza') != 'baja'
+            fecha = fecha_valida(info.get('fecha'))
+            if not seguro or info['numero'] != a['numero']:
+                visto = info.get('numero') or 'ilegible'
+                if a['estado'] == 'entregado':
+                    cambios.append(f"⚠️ {nombre_actual}: ya ENTREGADO, la relectura no confirma el "
+                                   f"número (lee {visto})")
+                elif a['estado'] != 'revisar':
+                    con.execute("UPDATE albaranes SET estado='revisar', entrega_nota=? WHERE id=?",
+                                (f'el repaso lee {visto}', a['id']))
+                    cambios.append(f"🔎 {nombre_actual}: a revisar (la relectura lee {visto})")
+                continue
+            if not fecha or a['estado'] == 'revisar':
+                continue
+            if a['fecha_doc'] == f'{fecha:%Y-%m-%d}' and f'/{fecha:%Y}/{fecha:%m}/' in a['ruta']:
+                continue
+            if a['estado'] == 'entregado':
+                con.execute('UPDATE albaranes SET fecha_doc=? WHERE id=?', (f'{fecha:%Y-%m-%d}', a['id']))
+                cambios.append(f"ℹ️ {nombre_actual}: ya entregado; su fecha de carga es "
+                               f"{fecha:%d/%m/%Y} (no se mueve)")
+                continue
+            cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
+                if a['cliente_id'] else None
+            carpeta = carpeta_de(cliente, a['emisor'], fecha)
+            carpeta.mkdir(parents=True, exist_ok=True)
+            destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha),
+                                    DATA / a['ruta'])
+            (DATA / a['ruta']).rename(destino)
+            con.execute('UPDATE albaranes SET fecha_doc=?, ruta=? WHERE id=?',
+                        (f'{fecha:%Y-%m-%d}', str(destino.relative_to(DATA)), a['id']))
+            cambios.append(f"📁 {nombre_actual}: de {Path(a['ruta']).parent.relative_to('archivo')}/ "
+                           f"a {destino.parent.relative_to(ARCHIVO)}/ (carga {fecha:%d/%m/%Y})")
+        cfg_set(con, 'repaso', json.dumps({'estado': 'hecho', 'total': len(filas), 'cambios': cambios,
+                                           'fin': datetime.now().isoformat(timespec='seconds')}))
+
+
+@app.route('/ajustes/repasar', methods=['POST'])
+@requiere_acceso
+def ajustes_repasar():
+    threading.Thread(target=repasar_todo, daemon=True).start()
+    flash('Repaso en marcha: se están releyendo todos los albaranes. El resultado sale aquí.')
+    return redirect(url_for('ajustes') + '#repaso')
 
 
 @app.route('/salud')

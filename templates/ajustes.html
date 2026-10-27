@@ -17,6 +17,25 @@
   <p><button class="boton">Guardar</button></p>
 </form>
 
+<h2 id="repaso">Volver a revisar todo lo subido</h2>
+{% if repaso.get('estado') == 'leyendo' %}<meta http-equiv="refresh" content="5">{% endif %}
+<p class="mini">Relee cada albarán ya subido con el lector actual (número con tres lecturas y fecha de carga),
+lo recoloca en su año y mes si estaba mal y manda a Revisión los números que no se confirmen.
+Lo ya entregado no se toca: solo se avisa.</p>
+<form method="post" action="{{ url_for('ajustes_repasar') }}"
+      onsubmit="return confirm('¿Releer todos los albaranes subidos? Tarda unos segundos por albarán.')">
+  <button class="boton" {{ 'disabled' if repaso.get('estado') == 'leyendo' }}>Volver a revisar todo</button>
+  {% if repaso.get('estado') == 'leyendo' %}<span class="mini">releyendo {{ repaso.get('total') }} albaranes…</span>{% endif %}
+</form>
+{% if repaso.get('estado') == 'hecho' %}
+<div class="aviso" style="margin-top:.8rem">
+  <strong>Último repaso ({{ repaso['fin'][8:10] }}/{{ repaso['fin'][5:7] }} {{ repaso['fin'][11:16] }}):</strong>
+  {{ repaso['total'] }} albaranes releídos.
+  {% if repaso['cambios'] %}<ul style="margin:.4rem 0 0 1.1rem;padding:0">{% for c in repaso['cambios'] %}<li>{{ c }}</li>{% endfor %}</ul>
+  {% else %} Todo estaba bien colocado y con el número confirmado.{% endif %}
+</div>
+{% endif %}
+
 <h2>Comunicaciones — email saliente (SMTP)</h2>
 <form method="post" style="max-width:560px">
   <input type="hidden" name="accion" value="smtp">

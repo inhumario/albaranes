@@ -18,8 +18,9 @@ from pathlib import Path
 import anthropic
 from pypdf import PdfReader, PdfWriter
 
-MODELO = 'claude-haiku-4-5-20251001'
-DPI = 150
+MODELO = 'claude-sonnet-5'  # Haiku confundía el 3 con el 5 en estos escaneos (27-10)
+DPI = 200  # a 150 Haiku confundía el 3 con el 5 (27-10)
+LECTURAS_A_LA_VEZ = 6
 
 PROMPT = """Esta imagen es una página escaneada de un documento de transporte: normalmente un
 albarán de entrega (delivery note), pero puede ser otro documento, como una ORDEN DE CARGA.
@@ -85,22 +86,30 @@ PROMPT_VERIFICACION = ('Devuelve SOLO el número identificador del albarán de e
 
 MODELO_CONTRASTE = 'claude-sonnet-5'
 DPI_CONTRASTE = 220
+DPI_AMPLIADA = 300
+MODELO_AMPLIADA = 'claude-opus-5-5'  # tercera lectura con otra familia de modelo
+
+PROMPT_AMPLIADA = ('Esto es un albarán escaneado a alta resolución. Lee el número del albarán (el que acompaña a '
+                   'DELIVERY NOTE / ALBARÁN Nº) DÍGITO A DÍGITO, separando cada carácter con un espacio, '
+                   'y nada más. Ejemplo de respuesta: 1 2 3 4 5 6 7 8. Si no lo ves, responde NO.')
 
 
 def _pedir(datos: str, prompt: str, max_tokens: int = 300, modelo: str = MODELO) -> str:
     # sin temperature: desde oct-2026 la API la rechaza también en Haiku («Extra inputs
     # are not permitted»); la fiabilidad la da la lectura de contraste descorrelacionada
+    max_tokens = max(max_tokens, 2000)  # margen para el razonamiento previo del modelo
     resp = _api().messages.create(
         model=modelo, max_tokens=max_tokens,
         messages=[{'role': 'user', 'content': [
             {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': datos}},
             {'type': 'text', 'text': prompt},
         ]}])
-    return resp.content[0].text
+    # Sonnet puede anteponer un bloque de razonamiento: se junta solo el texto
+    return ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
 
 
 def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
-    """Doble lectura DESCORRELACIONADA: la extracción completa (Haiku, render 150 dpi)
+    """Triple lectura DESCORRELACIONADA (la tercera, ampliada, desde el 27-10): la extracción completa (Haiku, render 150 dpi)
     se contrasta con una segunda lectura solo del número hecha por otro modelo sobre
     otro renderizado (Sonnet, 220 dpi). Si no coinciden, el albarán va a revisión —
     nunca se archiva un número dudoso. Con la misma imagen y el mismo modelo no basta:
@@ -109,7 +118,11 @@ def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
     datos = base64.standard_b64encode(png.read_bytes()).decode()
     m = re.search(r'\{.*\}', _pedir(datos, PROMPT), re.S)
     info = json.loads(m.group(0)) if m else {'numero': None, 'confianza': 'baja'}
-    if (info.get('tipo') or 'albaran') != 'albaran':
+    if info.get('numero'):  # «8046354 0» → 80463540
+        info['numero'] = re.sub(r'\s+', '', str(info['numero'])) or None
+    # el modelo escribe el tipo a su manera («albarán», «orden de carga»…): se normaliza
+    info['tipo'] = 'orden_carga' if 'orden' in normaliza(info.get('tipo') or '') else 'albaran'
+    if info['tipo'] != 'albaran':
         info['numero'] = None  # una orden de carga no es un albarán: no se verifica su número
         return info
     if info.get('numero'):
@@ -125,7 +138,27 @@ def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
         if contraste != info['numero']:
             info['confianza'] = 'baja'
             info['numero_contraste'] = contraste
+            return info
+        # Tercera lectura (27-10): las dos primeras llegaron a coincidir en el MISMO error
+        # (80463538 → 80465538). Se amplía solo la casilla del número a 300 dpi y se lee
+        # dígito a dígito: tiene que dar lo mismo que las otras dos.
+        ampliada = _lectura_ampliada(png, pdf, pagina)
+        info['numero_ampliada'] = ampliada
+        if ampliada != info['numero']:
+            info['confianza'] = 'baja'
     return info
+
+
+def _lectura_ampliada(png: Path, pdf: Path, pagina: int) -> str:
+    """Página entera a 300 dpi en gris, leída dígito a dígito por Sonnet. (Recortar la casilla
+    con una caja pedida a Haiku se probó el 27-10 y falla: la caja sale desplazada.)"""
+    with tempfile.TemporaryDirectory() as tmp:
+        pref = Path(tmp) / 'a'
+        subprocess.run(['pdftoppm', '-r', str(DPI_AMPLIADA), '-png', '-gray',
+                        '-f', str(pagina + 1), '-l', str(pagina + 1), str(pdf), str(pref)], check=True)
+        datos3 = base64.standard_b64encode(next(Path(tmp).glob('a-*.png')).read_bytes()).decode()
+    texto = _pedir(datos3, PROMPT_AMPLIADA, 80, MODELO_AMPLIADA)
+    return re.sub(r'[^0-9A-Za-z/-]', '', texto)
 
 
 def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
@@ -140,11 +173,23 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
         pngs = sorted(Path(tmp).glob('p-*.png'))
         if avance:
             avance(0, len(pngs))
-        for i, png in enumerate(pngs):
-            info = _analizar_pagina(png, pdf, i)
-            if avance:
-                avance(i + 1, len(pngs))
-            if (info.get('tipo') or 'albaran') == 'orden_carga':
+        # cada página tarda ~16 s (tres lecturas): se leen varias a la vez y luego se
+        # agrupan en orden
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        hechas, cerrojo = [0], threading.Lock()
+
+        def leer(i_png):
+            r = _analizar_pagina(i_png[1], pdf, i_png[0])
+            with cerrojo:
+                hechas[0] += 1
+                if avance:
+                    avance(hechas[0], len(pngs))
+            return r
+        with ThreadPoolExecutor(max_workers=LECTURAS_A_LA_VEZ) as ex:
+            infos = list(ex.map(leer, enumerate(pngs)))
+        for i, info in enumerate(infos):
+            if info['tipo'] == 'orden_carga':
                 # documento anexo: se une luego al PDF del albarán que cita
                 if actual:
                     grupos.append(actual)
