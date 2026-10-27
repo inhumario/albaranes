@@ -30,7 +30,7 @@
 
   <label style="display:flex;align-items:center;gap:.5rem">
     <input type="checkbox" name="auto_entrega" style="width:auto" {{ 'checked' if (c and c['auto_entrega']) or not c }}>
-    Entregar automáticamente al procesar (subir y ya; desmarcar solo si este cliente exige revisar antes)
+    Entregar automáticamente al procesar <span class="mini">(solo cuando en Ajustes está desactivado «Revisar antes de enviar»; con la revisión activada, todo espera a que pulses Enviar)</span>
   </label>
 
   <label>Email de entrega</label>

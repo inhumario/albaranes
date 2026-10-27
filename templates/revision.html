@@ -6,13 +6,6 @@
 .lectura{background:#fff;border:1px solid var(--borde);border-radius:8px;padding:.7rem .9rem;margin-bottom:.6rem}
 .barra{height:10px;background:var(--zebra);border:1px solid var(--borde);border-radius:99px;overflow:hidden;margin-top:.4rem}
 .barra span{display:block;height:100%;background:var(--filete);transition:width .5s}
-.carpeta{background:#fff;border:1px solid var(--borde);border-radius:10px;margin:1rem 0;overflow:hidden}
-.carpeta.dudas{border-color:#e3b6b6}
-.carpeta-cab{background:var(--cab);padding:.7rem .9rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--borde)}
-.carpeta.dudas .carpeta-cab{background:var(--rojo-f)}
-.carpeta-cab .ruta{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo)}
-.carpeta-cab .destino{font-size:.88rem;color:var(--sub)}
-.carpeta-cab form{margin-left:auto}
 .enviar-todo{position:sticky;bottom:0;background:var(--fondo);border-top:2px solid var(--filete);padding:.8rem 0;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
 .enviar-todo .boton{font-size:1rem;padding:.6rem 1.2rem}
 @media (max-width:640px){.rejilla{grid-template-columns:repeat(2,1fr);gap:.6rem;padding:.6rem}.carpeta-cab form{margin-left:0}}
@@ -96,7 +89,7 @@
 {% endfor %}
 
 {% if not grupos and not dudosos and not en_curso %}
-<div class="aviso">No hay nada pendiente de revisar. Sube un escaneo desde el <a href="{{ url_for('index') }}">Panel</a>.</div>
+<div class="aviso">No hay nada pendiente de revisar. Sube un escaneo desde <a href="{{ url_for('index') }}">Subir escaneo</a>.</div>
 {% endif %}
 
 {% if n_colocados %}

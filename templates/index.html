@@ -1,8 +1,7 @@
 {% extends 'base.html' %}
 {% block cuerpo %}
-<h1>Panel</h1>
-{% if sin_smtp %}<div class="aviso">⚠ Hay clientes con entrega por email pero el SMTP no está
-configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a>.</div>{% endif %}
+<h1>Subir escaneo</h1>
+
 
 <form class="subida" id="subida" method="post" action="{{ url_for('subir') }}" enctype="multipart/form-data">
   <div class="subida-cab">
@@ -83,40 +82,8 @@ configurado — <a href="{{ url_for('ajustes') }}">Ajustes → Comunicaciones</a
 })();
 </script>
 
-<div class="tarjetas">
-  <div class="tarjeta"><div class="n">{{ contadores.get('archivado',0) + contadores.get('entregado',0) + contadores.get('pendiente_entrega',0) }}</div><div class="t">albaranes archivados</div></div>
-  {% if contadores.get('colocado',0) %}<div class="tarjeta"><div class="n"><a href="{{ url_for('revision') }}">{{ contadores.get('colocado',0) }}</a></div><div class="t">colocados, sin enviar</div></div>{% endif %}
-  <div class="tarjeta"><div class="n">{{ contadores.get('entregado',0) }}</div><div class="t">entregados a clientes</div></div>
-  <div class="tarjeta"><div class="n">{{ contadores.get('pendiente_entrega',0) }}</div><div class="t">pendientes de entrega</div></div>
-  <div class="tarjeta"><div class="n">{{ contadores.get('revisar',0) }}</div><div class="t">a revisar</div></div>
-</div>
-
-{% if pendientes %}
-<h2 id="pendientes">Pendientes de entrega y revisión</h2>
-<div class="tabla-scroll"><table>
-<tr><th>Nº albarán</th><th>Cliente</th><th>Estado</th><th>Acción</th></tr>
-{% for a in pendientes %}
-<tr>
-  <td><a href="{{ url_for('albaran_pdf', aid=a['id']) }}">{{ a['numero'] or '(sin número)' }}</a></td>
-  <td>{{ a['cliente'] or a['emisor'] or '—' }}</td>
-  <td><span class="pill {{ a['estado'] }}">{{ a['estado'].replace('_',' ') }}</span>
-      {% if a['entrega_nota'] %}<div class="mini">{{ a['entrega_nota'] }}</div>{% endif %}</td>
-  <td>
-    {% if a['estado'] == 'pendiente_entrega' and a['modo_entrega'] == 'portal' %}
-      <a class="boton" href="{{ url_for('portal', cid=a['cliente_id']) }}">Subir al portal</a>
-    {% elif a['estado'] == 'pendiente_entrega' %}
-      <form class="linea" method="post" action="{{ url_for('albaran_entregar', aid=a['id']) }}">
-        <button class="boton">Entregar ({{ a['modo_entrega'] }})</button></form>
-      <form class="linea" method="post" action="{{ url_for('albaran_marcar', aid=a['id']) }}">
-        <button class="boton suave">Ya entregado</button></form>
-    {% else %}
-      <a class="boton suave" href="{{ url_for('albaran_pdf', aid=a['id']) }}">Ver PDF</a>
-    {% endif %}
-  </td>
-</tr>
-{% endfor %}
-</table></div>
-{% endif %}
+<p class="mini" style="margin-top:.8rem">Cuando termine de leerlos, los verás colocados en
+<a href="{{ url_for('revision') }}">Revisión</a>; nada sale hacia los clientes hasta que pulses «Enviar».</p>
 
 <h2>Últimos escaneos</h2>
 <div class="tabla-scroll"><table>

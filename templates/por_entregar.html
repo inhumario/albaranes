@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block titulo %}Por entregar · Albaranes · Inhumario{% endblock %}
+{% block cuerpo %}
+<h1>Por entregar</h1>
+<p class="mini">Albaranes ya revisados que todavía no han llegado a su cliente, con el motivo.
+Lo que aún no has revisado está en <a href="{{ url_for('revision') }}">Revisión</a>.</p>
+
+{% if sin_smtp and grupos|selectattr('modo', 'equalto', 'email')|list %}
+<div class="aviso">⚠ No hay correo configurado para enviar: los clientes por email se quedan aquí hasta que se
+configure en <a href="{{ url_for('ajustes') }}">Ajustes › Comunicaciones</a>.</div>
+{% endif %}
+
+{% for g in grupos %}
+<div class="carpeta">
+  <div class="carpeta-cab">
+    <span class="ruta">{{ g['cliente'] or 'Sin cliente' }}</span>
+    <span class="destino">{{ g['albaranes']|length }} {{ 'albaranes' if g['albaranes']|length > 1 else 'albarán' }} · {{ g['destino'] }}</span>
+    {% if g['modo'] == 'portal' %}
+      <a class="boton" href="{{ url_for('portal', cid=g['cliente_id']) }}">Subir al portal</a>
+    {% elif g['cliente_id'] %}
+      <form method="post" action="{{ url_for('reintentar', cid=g['cliente_id']) }}">
+        <button class="boton">{{ 'Enviar ahora' if g['modo'] == 'email' else 'Reintentar' }}</button></form>
+    {% endif %}
+  </div>
+  <div class="tabla-scroll"><table>
+  <tr><th>Fichero</th><th>Motivo</th><th></th></tr>
+  {% for a in g['albaranes'] %}
+  <tr>
+    <td><a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><code>{{ a['ruta'].rsplit('/', 1)[1] }}</code></a></td>
+    <td class="mini">{{ 'pendiente de subir a mano' if a['entrega_nota'] == 'para subir al portal' else (a['entrega_nota'] or 'pendiente') }}</td>
+    <td style="white-space:nowrap">
+      <form class="linea" method="post" action="{{ url_for('albaran_marcar', aid=a['id']) }}">
+        <button class="boton suave" title="Si ya se lo has hecho llegar por otra vía">Ya entregado</button></form>
+    </td>
+  </tr>
+  {% endfor %}
+  </table></div>
+</div>
+{% else %}
+<div class="aviso">No hay nada pendiente de entregar. 👍</div>
+{% endfor %}
+{% endblock %}

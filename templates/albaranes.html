@@ -97,7 +97,7 @@
   {% endif %}
 
   {% if not carpetas and not ficheros %}
-  <div class="aviso">{% if ver != 'todos' %}No hay albaranes {{ 'enviados' if ver == 'enviados' else 'sin enviar' }} aquí.{% elif carpeta %}Esta carpeta está vacía.{% else %}Todavía no hay nada archivado. Sube un escaneo desde el <a href="{{ url_for('index') }}">Panel</a>.{% endif %}</div>
+  <div class="aviso">{% if ver != 'todos' %}No hay albaranes {{ 'enviados' if ver == 'enviados' else 'sin enviar' }} aquí.{% elif carpeta %}Esta carpeta está vacía.{% else %}Todavía no hay nada archivado. Sube un escaneo desde <a href="{{ url_for('index') }}">Subir escaneo</a>.{% endif %}</div>
   {% endif %}
 {% endif %}
 {% endblock %}

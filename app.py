@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.7.0'
+VERSION = '0.7.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -378,7 +378,39 @@ def inicio():
 @app.route('/por-entregar')
 @requiere_acceso
 def pendientes():
-    return redirect(url_for('index') + '#pendientes')
+    """Lo aprobado que aún no ha llegado a su cliente, agrupado por cliente y con el motivo."""
+    with db() as con:
+        filas = con.execute(
+            "SELECT a.*, c.nombre AS cliente, c.modo_entrega, c.email_para, c.portal_url "
+            "FROM albaranes a LEFT JOIN clientes c ON c.id=a.cliente_id "
+            "WHERE a.estado='pendiente_entrega' ORDER BY c.nombre, a.ruta").fetchall()
+        sin_smtp = not smtp_config(con)
+    grupos = {}
+    for a in filas:
+        g = grupos.setdefault(a['cliente_id'], {'cliente_id': a['cliente_id'], 'cliente': a['cliente'],
+                                                'modo': a['modo_entrega'], 'destino': destino_texto(a),
+                                                'albaranes': []})
+        g['albaranes'].append(a)
+    return render_template('por_entregar.html', grupos=list(grupos.values()), sin_smtp=sin_smtp)
+
+
+@app.route('/por-entregar/<int:cid>/reintentar', methods=['POST'])
+@requiere_acceso
+def reintentar(cid):
+    """Vuelve a intentar la entrega de todo lo pendiente de un cliente."""
+    with db() as con:
+        ids = [r['id'] for r in con.execute(
+            "SELECT id FROM albaranes WHERE cliente_id=? AND estado='pendiente_entrega'", (cid,))]
+        resultados = []
+        for i in ids:
+            r = entregar(i, con)
+            if r != 'ok':
+                con.execute('UPDATE albaranes SET entrega_nota=? WHERE id=?', (r, i))
+            resultados.append(r)
+    ok = sum(r == 'ok' for r in resultados)
+    fallos = [r for r in resultados if r != 'ok']
+    flash(f'{ok} entregado(s).' + (f' {len(fallos)} siguen pendientes: {fallos[0]}' if fallos else ''))
+    return redirect(url_for('pendientes'))
 
 
 @app.route('/panel')
@@ -478,7 +510,7 @@ def revision_enviar():
     if a_portal:
         partes.append(f'{a_portal} preparado(s) para subir al portal')
     if otros:
-        partes.append(f'{otros} pendiente(s) de entrega (ver Panel)')
+        partes.append(f'{otros} pendiente(s) de entrega (ver «Por entregar»)')
     flash('Hecho: ' + ', '.join(partes) + '.' if partes else 'No había nada colocado.')
     if a_portal and not ok and not otros:
         with db() as con:
