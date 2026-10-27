@@ -88,6 +88,8 @@
           {% endif %}
         {% elif a['estado'] == 'revisar' %}
           <div class="envio no">⚠️ Para revisar · <a href="{{ url_for('revision') }}">colocar</a></div>
+        {% elif a['estado'] == 'descartado' %}
+          <div class="envio archivo">♻️ Copia repetida descartada</div>
         {% else %}
           <div class="envio archivo">Solo archivo (este cliente no recibe envío)</div>
         {% endif %}

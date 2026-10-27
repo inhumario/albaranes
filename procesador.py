@@ -31,7 +31,8 @@ Extrae en JSON estricto, sin nada más:
   "emisor": "marca principal del membrete, en minúsculas, UNA palabra si es posible (p.ej. 'delaviuda', no 'delaviuda alimentación s.a.u.')",
   "numero": "el número identificador del albarán tal cual aparece (junto a etiquetas como DELIVERY NOTE, ALBARÁN Nº, Nº DOCUMENTO...). Solo el número, sin espacios",
   "hoja": "valor del campo SHEET/HOJA si existe, si no null",
-  "fecha": "fecha del albarán en formato AAAA-MM-DD. Si hay fecha de carga/expedición (LOADING, FECHA CARGA, FECHA SALIDA) usa SIEMPRE esa, aunque haya también fecha de entrega (DELIVERY): nunca la de entrega. Si no hay de carga, la de emisión del documento (DATE, FECHA). null si no hay ninguna. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
+  "fecha": "SOLO la fecha de CARGA en formato AAAA-MM-DD: en un albarán, la de LOADING / Expedición / Fecha de carga / Fecha de salida; en una orden de carga, su campo FECHA. NUNCA la de entrega (DELIVERY, Entrega) ni la del pedido (Nº PEDIDO/FECHA) ni sellos de recepción. Si la casilla de carga o expedición está vacía, null. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
+  "sellado": "true si la hoja lleva sello o firma de recepción del cliente (p.ej. 'CONFORME', fecha de llegada estampada), si no false",
   "es_continuacion": "true solo si la página claramente NO es la primera hoja de un albarán (no tiene cabecera con número propio)",
   "confianza": "alta|media|baja según lo legible que sea el número"
 }
@@ -197,6 +198,7 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                 grupos.append({'tipo': 'orden_carga', 'numero': None,
                                'emisor': info.get('emisor') or '', 'fecha': info.get('fecha'),
                                'ref_texto': info.get('albaranes_ref') or '',
+                               'rango': numeros_citados(info.get('albaranes_ref')),
                                # rango → la orden va con el PRIMER albarán (regla de Mario)
                                'refs': numeros_citados(info.get('albaranes_ref'))[:1],
                                'confianza': info.get('confianza', 'media'), 'paginas': [i]})
@@ -216,6 +218,7 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                 grupos.append(actual)
             actual = {'tipo': 'albaran', 'numero': numero, 'emisor': info.get('emisor') or '',
                       'hojas': [hoja], 'duplicadas': 0,
+                      'sellado': str(info.get('sellado')).lower() == 'true',
                       'fecha': info.get('fecha'),
                       'confianza': info.get('confianza', 'baja'), 'paginas': [i]}
         if actual:

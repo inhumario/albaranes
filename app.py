@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.9.0'
+VERSION = '0.9.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -120,6 +120,15 @@ def init_db() -> None:
             con.execute("ALTER TABLE albaranes ADD COLUMN adjuntos TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+        # v0.9.1: fecha y rango de la orden de carga (da la fecha de carga a los albaranes que
+        # no la traen) y sello de recepción (entre copias repetidas se guarda la sellada)
+        for tabla, col in (('anexos', "fecha TEXT"), ('anexos', "rango_ini TEXT"),
+                           ('anexos', "rango_fin TEXT"),
+                           ('albaranes', "sellado INTEGER NOT NULL DEFAULT 0")):
+            try:
+                con.execute(f'ALTER TABLE {tabla} ADD COLUMN {col}')
+            except sqlite3.OperationalError:
+                pass
         # v0.8.2: lo descartado por repetido en cada escaneo
         try:
             con.execute("ALTER TABLE lotes ADD COLUMN descartados TEXT NOT NULL DEFAULT ''")
@@ -309,17 +318,23 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     destino = destino_libre(carpeta, f'orden-lote{lote_id}-{n + 1}.pdf')
                     with destino.open('wb') as f:
                         g['writer'].write(f)
-                    con.execute('INSERT INTO anexos (lote_id, ref_texto, refs, ruta, paginas, creado) '
-                                'VALUES (?,?,?,?,?,?)',
-                                (lote_id, g['ref_texto'], json.dumps(g['refs']),
-                                 str(destino.relative_to(DATA)), len(g['paginas']),
-                                 ahora.isoformat(timespec='seconds')))
+                    alta_anexo(con, lote_id, g, destino, ahora)
                     continue
                 cliente = casar_cliente(g['emisor'], con)
-                if g['numero'] and not g['revisar'] and con.execute(
-                        'SELECT 1 FROM albaranes WHERE numero=? AND cliente_id IS ?',
-                        (g['numero'], cliente['id'] if cliente else None)).fetchone():
-                    descartados.append(f"{g['numero']} (ya estaba)")
+                previo = con.execute(
+                    "SELECT * FROM albaranes WHERE numero=? AND cliente_id IS ? AND estado != 'descartado'",
+                    (g['numero'], cliente['id'] if cliente else None)).fetchone() \
+                    if g['numero'] and not g['revisar'] else None
+                if previo:
+                    if g.get('sellado') and not previo['sellado'] and previo['estado'] != 'entregado':
+                        # la copia nueva trae el sello de recepción: sustituye a la que había
+                        with (DATA / previo['ruta']).open('wb') as f:
+                            g['writer'].write(f)
+                        con.execute('UPDATE albaranes SET sellado=1, paginas=? WHERE id=?',
+                                    (len(g['paginas']), previo['id']))
+                        descartados.append(f"{g['numero']} (ya estaba: se guarda esta copia, que viene sellada)")
+                    else:
+                        descartados.append(f"{g['numero']} (ya estaba)")
                     continue
                 fecha_doc = fecha_valida(g.get('fecha'))
                 cuando = fecha_doc or ahora  # año/mes de la carpeta: los del albarán
@@ -343,18 +358,20 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     estado = estado_final(cliente)
                 cur = con.execute(
                     'INSERT INTO albaranes (lote_id, cliente_id, numero, emisor, paginas,'
-                    ' confianza, ruta, estado, creado, fecha_doc) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                    ' confianza, ruta, estado, creado, fecha_doc, sellado) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                     (lote_id, cliente['id'] if cliente else None, g['numero'], g['emisor'],
                      len(g['paginas']), g['confianza'], str(destino.relative_to(DATA)),
                      estado, ahora.isoformat(timespec='seconds'),
-                     f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None))
+                     f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None, int(bool(g.get('sellado')))))
                 if estado == 'pendiente_entrega' and cliente['auto_entrega']:
                     resultado = entregar(cur.lastrowid, con)
                     if resultado != 'ok':
                         con.execute('UPDATE albaranes SET entrega_nota=? WHERE id=?',
                                     (resultado, cur.lastrowid))
-            # las órdenes de carga se pegan a su albarán, venga en este escaneo o en otro
+            # las órdenes de carga se pegan a su albarán, venga en este escaneo o en otro, y
+            # dan su fecha de carga a los albaranes de su rango que no la traen
             unir_anexos(con)
+            fechas_desde_ordenes(con)
             con.execute('UPDATE lotes SET estado=?, descartados=? WHERE id=?',
                         ('procesado', ', '.join(descartados), lote_id))
     except Exception as e:  # el lote nunca se queda en 'procesando' en silencio
@@ -430,6 +447,86 @@ def pegar_anexo(anexo, albaran, con: sqlite3.Connection) -> None:
     con.execute('UPDATE anexos SET unido_a=? WHERE id=?', (albaran['id'], anexo['id']))
 
 
+def alta_anexo(con, lote_id, g, destino: Path, ahora: datetime) -> None:
+    rango = g.get('rango') or []
+    fecha = fecha_valida(g.get('fecha'))
+    con.execute('INSERT INTO anexos (lote_id, ref_texto, refs, ruta, paginas, creado, fecha, '
+                'rango_ini, rango_fin) VALUES (?,?,?,?,?,?,?,?,?)',
+                (lote_id, g['ref_texto'], json.dumps(g['refs']), str(destino.relative_to(DATA)),
+                 len(g['paginas']), ahora.isoformat(timespec='seconds'),
+                 f'{fecha:%Y-%m-%d}' if fecha else None,
+                 rango[0] if rango else None, rango[-1] if rango else None))
+
+
+def recolocar(con, a, fecha: datetime) -> str:
+    """Mueve un albarán a la carpeta de su fecha de carga (y aplica el nombre del cliente)."""
+    cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
+        if a['cliente_id'] else None
+    carpeta = carpeta_de(cliente, a['emisor'], fecha)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha),
+                            DATA / a['ruta'])
+    (DATA / a['ruta']).rename(destino)
+    con.execute('UPDATE albaranes SET fecha_doc=?, ruta=? WHERE id=?',
+                (f'{fecha:%Y-%m-%d}', str(destino.relative_to(DATA)), a['id']))
+    return (f"{Path(a['ruta']).parent.relative_to('archivo')}/ → "
+            f"{destino.parent.relative_to(ARCHIVO)}/{destino.name}")
+
+
+def fechas_desde_ordenes(con: sqlite3.Connection) -> list[str]:
+    """Albaranes sin fecha de carga: toman la FECHA de la orden de carga cuyo rango los
+    incluye (la orden es la que lleva la fecha de carga; el albarán a veces no)."""
+    cambios = []
+    ordenes = con.execute('SELECT * FROM anexos WHERE fecha IS NOT NULL AND rango_ini IS NOT NULL').fetchall()
+    for a in con.execute("SELECT * FROM albaranes WHERE fecha_doc IS NULL AND numero IS NOT NULL "
+                         "AND estado NOT IN ('entregado', 'descartado')").fetchall():
+        for o in ordenes:
+            ini, fin = o['rango_ini'], o['rango_fin'] or o['rango_ini']
+            if a['numero'].isdigit() and len(a['numero']) == len(ini) == len(fin) \
+                    and int(ini) <= int(a['numero']) <= int(fin):
+                fecha = fecha_valida(o['fecha'])
+                if fecha:
+                    cambios.append(f"📅 {Path(a['ruta']).name}: toma la fecha de carga de su orden "
+                                   f"({fecha:%d/%m/%Y}) · {recolocar(con, a, fecha)}")
+                break
+    return cambios
+
+
+def descartar_repetidos(con: sqlite3.Connection) -> list[str]:
+    """Del mismo albarán (número y cliente) solo se queda uno: el entregado si lo hay; si no,
+    el que trae sello de recepción; si no, el primero. Las copias se apartan a _descartados/
+    (no se borran) y se marcan como descartadas."""
+    cambios = []
+    grupos = {}
+    for a in con.execute("SELECT * FROM albaranes WHERE estado != 'descartado' AND numero IS NOT NULL "
+                         "ORDER BY id").fetchall():
+        grupos.setdefault((a['numero'], a['cliente_id']), []).append(a)
+    for (numero, _), copias in grupos.items():
+        if len(copias) < 2:
+            continue
+        # se queda: la entregada; si no, una con el número confirmado (y mejor sellada)
+        confirmadas = [c for c in copias if c['estado'] != 'revisar']
+        guardar = next((c for c in copias if c['estado'] == 'entregado'), None) \
+            or next((c for c in confirmadas if c['sellado']), None) \
+            or (confirmadas[0] if confirmadas else None) \
+            or next((c for c in copias if c['sellado']), None) or copias[0]
+        for c in copias:
+            if c['id'] == guardar['id'] or c['estado'] == 'entregado':
+                continue
+            carpeta = ARCHIVO / '_descartados'
+            carpeta.mkdir(parents=True, exist_ok=True)
+            destino = destino_libre(carpeta, Path(c['ruta']).name)
+            (DATA / c['ruta']).rename(destino)
+            con.execute("UPDATE albaranes SET estado='descartado', ruta=?, "
+                        "entrega_nota='copia repetida' WHERE id=?",
+                        (str(destino.relative_to(DATA)), c['id']))
+            # si la orden de carga estaba pegada a la copia, pasa a la que se queda
+            con.execute('UPDATE anexos SET unido_a=NULL WHERE unido_a=?', (c['id'],))
+        cambios.append(f"♻️ {numero}: {len(copias)} copias → se queda una"
+                       f"{' (la sellada)' if guardar['sellado'] else ''}")
+    return cambios
+
+
 def unir_anexos(con: sqlite3.Connection) -> None:
     """Pega cada orden de carga suelta al albarán que cita (el primero del rango), si ya
     existe y no se ha entregado."""
@@ -439,7 +536,7 @@ def unir_anexos(con: sqlite3.Connection) -> None:
             continue
         destinos = con.execute(
             f"SELECT * FROM albaranes WHERE numero IN ({','.join('?' * len(refs))}) "
-            "AND estado != 'entregado' ORDER BY numero", refs).fetchall()
+            "AND estado NOT IN ('entregado', 'descartado') ORDER BY numero", refs).fetchall()
         for alb in destinos:
             pegar_anexo(anexo, alb, con)
 
@@ -792,7 +889,8 @@ MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto
 def nombre_carpeta(nivel: int, slug: str, nombres_cliente: dict) -> str:
     """Nombre legible de una carpeta del archivo (cliente / año / mes)."""
     if nivel == 0:
-        return {'REVISAR': 'Para revisar'}.get(slug, nombres_cliente.get(slug, slug))
+        return {'REVISAR': 'Para revisar', '_descartados': 'Copias repetidas descartadas',
+                '_ordenes-de-carga': 'Órdenes de carga'}.get(slug, nombres_cliente.get(slug, slug))
     if nivel == 2 and slug.isdigit() and 1 <= int(slug) <= 12:
         return f'{slug} · {MESES[int(slug) - 1]}'
     return slug
@@ -1010,16 +1108,17 @@ def ajustes():
 
 
 def repasar_todo() -> None:
-    """Relee todos los albaranes ya subidos con el lector actual (número con triple lectura y
-    fecha de carga): recoloca en su año/mes los que estén mal y manda a revisar los números
-    que no se confirmen. Lo entregado no se mueve: solo se informa."""
+    """Relee todos los albaranes ya subidos con el lector actual y los deja como los dejaría
+    un escaneo de hoy: hojas que son órdenes de carga pasan a serlo, el número se confirma
+    con tres lecturas, cada uno va al año/mes de su FECHA DE CARGA (la suya o la de su
+    orden de carga), las copias repetidas se apartan y las órdenes se pegan a su albarán.
+    Lo entregado no se mueve: solo se informa."""
     import tempfile
     from concurrent.futures import ThreadPoolExecutor
     with db() as con:
         filas = [dict(r) for r in con.execute(
-            'SELECT a.*, c.nombre AS cliente FROM albaranes a LEFT JOIN clientes c '
-            'ON c.id=a.cliente_id ORDER BY a.id')]
-        cfg_set(con, 'repaso', json.dumps({'estado': 'leyendo', 'hechas': 0, 'total': len(filas),
+            "SELECT * FROM albaranes WHERE estado != 'descartado' ORDER BY id")]
+        cfg_set(con, 'repaso', json.dumps({'estado': 'leyendo', 'total': len(filas),
                                            'inicio': datetime.now().isoformat(timespec='seconds')}))
 
     def leer(a):
@@ -1028,47 +1127,79 @@ def repasar_todo() -> None:
             subprocess.run(['pdftoppm', '-r', str(procesador.DPI), '-png', '-singlefile', '-f', '1',
                             '-l', '1', str(pdf), f'{tmp}/p'], check=True)
             return procesador._analizar_pagina(Path(f'{tmp}/p.png'), pdf, 0)
-    with ThreadPoolExecutor(max_workers=procesador.LECTURAS_A_LA_VEZ) as ex:
-        lecturas = list(ex.map(leer, filas))
-
-    cambios = []
-    with db() as con:
-        for a, info in zip(filas, lecturas):
-            nombre_actual = Path(a['ruta']).name
-            seguro = info.get('numero') and info.get('confianza') != 'baja'
-            fecha = fecha_valida(info.get('fecha'))
-            if not seguro or info['numero'] != a['numero']:
-                visto = info.get('numero') or 'ilegible'
+    try:
+        with ThreadPoolExecutor(max_workers=procesador.LECTURAS_A_LA_VEZ) as ex:
+            lecturas = list(ex.map(leer, filas))
+        cambios = []
+        with db() as con:
+            ahora = datetime.now()
+            for a, info in zip(filas, lecturas):
+                nombre = Path(a['ruta']).name
+                if info.get('tipo') == 'orden_carga' and a['estado'] != 'entregado':
+                    carpeta = ARCHIVO / '_ordenes-de-carga'
+                    carpeta.mkdir(parents=True, exist_ok=True)
+                    destino = destino_libre(carpeta, f"orden-{procesador.normaliza(info.get('albaranes_ref') or nombre)}.pdf")
+                    (DATA / a['ruta']).rename(destino)
+                    rango = procesador.numeros_citados(info.get('albaranes_ref'))
+                    alta_anexo(con, a['lote_id'], {'ref_texto': info.get('albaranes_ref') or '',
+                                                   'refs': rango[:1], 'rango': rango,
+                                                   'fecha': info.get('fecha'),
+                                                   'paginas': [0] * a['paginas']}, destino, ahora)
+                    con.execute('DELETE FROM albaranes WHERE id=?', (a['id'],))
+                    cambios.append(f"📎 {nombre}: era una ORDEN DE CARGA (albarán {info.get('albaranes_ref')}, "
+                                   f"fecha {info.get('fecha')}) → pasa a orden de carga")
+                    continue
+                con.execute('UPDATE albaranes SET sellado=? WHERE id=?',
+                            (int(str(info.get('sellado')).lower() == 'true'), a['id']))
+                seguro = info.get('numero') and info.get('confianza') != 'baja'
+                if not seguro or info['numero'] != a['numero']:
+                    visto = info.get('numero') or 'ilegible'
+                    if a['estado'] == 'entregado':
+                        cambios.append(f"⚠️ {nombre}: ya ENTREGADO y la relectura no confirma el número "
+                                       f"(lee {visto})")
+                    elif a['estado'] != 'revisar':
+                        motivo = (f'la relectura lee {visto}' if visto != a['numero']
+                                  else 'las tres lecturas del número no coinciden')
+                        con.execute("UPDATE albaranes SET estado='revisar', entrega_nota=? WHERE id=?",
+                                    (motivo, a['id']))
+                        cambios.append(f"🔎 {nombre}: a revisar ({motivo})")
+                    continue
+                if a['estado'] == 'revisar':  # estaba en duda y ahora las tres lecturas lo confirman
+                    con.execute("UPDATE albaranes SET estado='colocado', entrega_nota='' WHERE id=?", (a['id'],))
+                    cambios.append(f"✅ {nombre}: número confirmado, sale de Revisar")
+                fecha = fecha_valida(info.get('fecha'))
                 if a['estado'] == 'entregado':
-                    cambios.append(f"⚠️ {nombre_actual}: ya ENTREGADO, la relectura no confirma el "
-                                   f"número (lee {visto})")
-                elif a['estado'] != 'revisar':
-                    con.execute("UPDATE albaranes SET estado='revisar', entrega_nota=? WHERE id=?",
-                                (f'el repaso lee {visto}', a['id']))
-                    cambios.append(f"🔎 {nombre_actual}: a revisar (la relectura lee {visto})")
-                continue
-            if not fecha or a['estado'] == 'revisar':
-                continue
-            if a['fecha_doc'] == f'{fecha:%Y-%m-%d}' and f'/{fecha:%Y}/{fecha:%m}/' in a['ruta']:
-                continue
-            if a['estado'] == 'entregado':
-                con.execute('UPDATE albaranes SET fecha_doc=? WHERE id=?', (f'{fecha:%Y-%m-%d}', a['id']))
-                cambios.append(f"ℹ️ {nombre_actual}: ya entregado; su fecha de carga es "
-                               f"{fecha:%d/%m/%Y} (no se mueve)")
-                continue
-            cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
-                if a['cliente_id'] else None
-            carpeta = carpeta_de(cliente, a['emisor'], fecha)
-            carpeta.mkdir(parents=True, exist_ok=True)
-            destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha),
-                                    DATA / a['ruta'])
-            (DATA / a['ruta']).rename(destino)
-            con.execute('UPDATE albaranes SET fecha_doc=?, ruta=? WHERE id=?',
-                        (f'{fecha:%Y-%m-%d}', str(destino.relative_to(DATA)), a['id']))
-            cambios.append(f"📁 {nombre_actual}: de {Path(a['ruta']).parent.relative_to('archivo')}/ "
-                           f"a {destino.parent.relative_to(ARCHIVO)}/ (carga {fecha:%d/%m/%Y})")
-        cfg_set(con, 'repaso', json.dumps({'estado': 'hecho', 'total': len(filas), 'cambios': cambios,
-                                           'fin': datetime.now().isoformat(timespec='seconds')}))
+                    if fecha and a['fecha_doc'] != f'{fecha:%Y-%m-%d}':
+                        con.execute('UPDATE albaranes SET fecha_doc=? WHERE id=?',
+                                    (f'{fecha:%Y-%m-%d}', a['id']))
+                    continue
+                if not fecha:
+                    # sin fecha de carga propia: se quita la que se hubiera leído antes (p. ej. la
+                    # del pedido) y la pondrá su orden de carga
+                    con.execute('UPDATE albaranes SET fecha_doc=NULL WHERE id=?', (a['id'],))
+                    continue
+                if a['fecha_doc'] == f'{fecha:%Y-%m-%d}' and f'/{fecha:%Y}/{fecha:%m}/' in a['ruta']:
+                    continue
+                a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
+                cambios.append(f"📁 {nombre}: carga {fecha:%d/%m/%Y} · {recolocar(con, a2, fecha)}")
+            cambios += descartar_repetidos(con)
+            unir_anexos(con)
+            cambios += fechas_desde_ordenes(con)
+            for a in con.execute("SELECT ruta FROM albaranes WHERE fecha_doc IS NULL "
+                                 "AND estado NOT IN ('descartado', 'revisar')"):
+                cambios.append(f"❓ {Path(a['ruta']).name}: sin fecha de carga (ni en el albarán ni en "
+                               f"una orden de carga): sigue en {Path(a['ruta']).parent.relative_to('archivo')}/")
+            for o in con.execute('SELECT * FROM anexos WHERE unido_a IS NOT NULL'):
+                alb = con.execute('SELECT ruta FROM albaranes WHERE id=?', (o['unido_a'],)).fetchone()
+                if alb:
+                    cambios.append(f"📎 orden de carga {o['ref_texto']} → pegada a {Path(alb['ruta']).name}")
+            cfg_set(con, 'repaso', json.dumps({'estado': 'hecho', 'total': len(filas), 'cambios': cambios,
+                                               'fin': datetime.now().isoformat(timespec='seconds')}))
+    except Exception as e:  # el repaso nunca se queda «leyendo» en silencio
+        with db() as con:
+            cfg_set(con, 'repaso', json.dumps({'estado': 'hecho', 'total': len(filas),
+                                               'cambios': [f'❌ el repaso falló: {e}'],
+                                               'fin': datetime.now().isoformat(timespec='seconds')}))
 
 
 @app.route('/ajustes/repasar', methods=['POST'])
