@@ -24,6 +24,10 @@
 </div>
 {% endfor %}
 
+{% for l in con_repetidos %}
+<div class="aviso">♻️ <strong>{{ l['fichero'] }}</strong>: descartado por repetido — {{ l['descartados'] }}.</div>
+{% endfor %}
+
 {% if dudosos %}
 <div class="carpeta dudas">
   <div class="carpeta-cab">

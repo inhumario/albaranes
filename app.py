@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.8.1'
+VERSION = '0.8.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -118,6 +118,11 @@ def init_db() -> None:
             creado TEXT NOT NULL)''')
         try:
             con.execute("ALTER TABLE albaranes ADD COLUMN adjuntos TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        # v0.8.2: lo descartado por repetido en cada escaneo
+        try:
+            con.execute("ALTER TABLE lotes ADD COLUMN descartados TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
         # v0.8: fecha propia del albarán (la que decide año/mes de la carpeta)
@@ -290,8 +295,15 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
         ahora = datetime.now()
         with db() as con:
             revisar_antes = cfg_get(con, 'revisar_antes') == '1'
+            descartados = []  # copias repetidas: solo hace falta una
             for n, g in enumerate(grupos):
+                if g.get('duplicadas'):
+                    descartados.append(f"{g['numero']} (copia en el mismo escaneo)")
                 if g.get('tipo') == 'orden_carga':
+                    if g['ref_texto'] and con.execute('SELECT 1 FROM anexos WHERE ref_texto=?',
+                                                      (g['ref_texto'],)).fetchone():
+                        descartados.append(f"orden de carga {g['ref_texto']} (ya estaba)")
+                        continue
                     carpeta = ARCHIVO / '_ordenes-de-carga'
                     carpeta.mkdir(parents=True, exist_ok=True)
                     destino = destino_libre(carpeta, f'orden-lote{lote_id}-{n + 1}.pdf')
@@ -304,6 +316,11 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                                  ahora.isoformat(timespec='seconds')))
                     continue
                 cliente = casar_cliente(g['emisor'], con)
+                if g['numero'] and not g['revisar'] and con.execute(
+                        'SELECT 1 FROM albaranes WHERE numero=? AND cliente_id IS ?',
+                        (g['numero'], cliente['id'] if cliente else None)).fetchone():
+                    descartados.append(f"{g['numero']} (ya estaba)")
+                    continue
                 fecha_doc = fecha_valida(g.get('fecha'))
                 cuando = fecha_doc or ahora  # año/mes de la carpeta: los del albarán
                 carpeta = carpeta_de(cliente, g['emisor'], cuando)
@@ -338,8 +355,8 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                                     (resultado, cur.lastrowid))
             # las órdenes de carga se pegan a su albarán, venga en este escaneo o en otro
             unir_anexos(con)
-            con.execute('UPDATE lotes SET estado=?, paginas=? WHERE id=?',
-                        ('procesado', sum(len(g['paginas']) for g in grupos), lote_id))
+            con.execute('UPDATE lotes SET estado=?, descartados=? WHERE id=?',
+                        ('procesado', ', '.join(descartados), lote_id))
     except Exception as e:  # el lote nunca se queda en 'procesando' en silencio
         with db() as con:
             con.execute('UPDATE lotes SET estado=? WHERE id=?', (f'error: {e}', lote_id))
@@ -553,6 +570,9 @@ def subir():
 def revision():
     with db() as con:
         en_curso = con.execute("SELECT * FROM lotes WHERE estado='procesando' ORDER BY id").fetchall()
+        con_repetidos = con.execute(
+            "SELECT fichero, descartados FROM lotes WHERE descartados != '' AND recibido >= ? "
+            "ORDER BY id DESC LIMIT 5", (f'{datetime.now():%Y-%m-%d}',)).fetchall()
         filas = con.execute(
             "SELECT a.*, c.nombre AS cliente, c.modo_entrega, c.email_para, c.portal_url, "
             "c.sftp_datos FROM albaranes a LEFT JOIN clientes c ON c.id=a.cliente_id "
@@ -576,6 +596,7 @@ def revision():
         g['albaranes'].append(a)
     dudosos = [a for a in filas if a['estado'] == 'revisar']
     return render_template('revision.html', en_curso=en_curso, grupos=grupos, ordenes=ordenes,
+                           con_repetidos=con_repetidos,
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
                            n_colocados=sum(len(g['albaranes']) for g in grupos.values()))
 

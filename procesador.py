@@ -154,13 +154,20 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                                'confianza': info.get('confianza', 'media'), 'paginas': [i]})
                 continue
             numero = info.get('numero')
+            hoja = str(info.get('hoja') or '').strip() or None
             cont = str(info.get('es_continuacion')).lower() == 'true'
+            if actual and numero and numero == actual['numero'] and hoja in actual['hojas']:
+                # la misma hoja del mismo albarán escaneada otra vez: copia, se descarta
+                actual['duplicadas'] += 1
+                continue
             if actual and (numero == actual['numero'] or (cont and not numero)):
                 actual['paginas'].append(i)
+                actual['hojas'].append(hoja)
                 continue
             if actual:
                 grupos.append(actual)
             actual = {'tipo': 'albaran', 'numero': numero, 'emisor': info.get('emisor') or '',
+                      'hojas': [hoja], 'duplicadas': 0,
                       'fecha': info.get('fecha'),
                       'confianza': info.get('confianza', 'baja'), 'paginas': [i]}
         if actual:
