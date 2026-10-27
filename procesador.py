@@ -40,7 +40,9 @@ Si tipo es orden_carga u otro, numero: null (el número que cite va en albaranes
 
 def numeros_citados(texto) -> list[str]:
     """Números de albarán que cita una orden de carga. Entiende la forma abreviada
-    «80465556-5568» (el segundo repite los primeros dígitos del primero: 80465568)."""
+    «80465556-5568» (el segundo repite los primeros dígitos del primero: 80465568).
+    Un guion es un RANGO (del 80465556 al 80465568) y la orden va con el primero
+    (regla de Mario 27-10): quien la une usa solo el primer número."""
     if not texto:
         return []
     trozos = re.findall(r'\d+', str(texto))
@@ -150,7 +152,8 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                 grupos.append({'tipo': 'orden_carga', 'numero': None,
                                'emisor': info.get('emisor') or '', 'fecha': info.get('fecha'),
                                'ref_texto': info.get('albaranes_ref') or '',
-                               'refs': numeros_citados(info.get('albaranes_ref')),
+                               # rango → la orden va con el PRIMER albarán (regla de Mario)
+                               'refs': numeros_citados(info.get('albaranes_ref'))[:1],
                                'confianza': info.get('confianza', 'media'), 'paginas': [i]})
                 continue
             numero = info.get('numero')

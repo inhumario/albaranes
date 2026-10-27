@@ -62,7 +62,7 @@
 <div class="carpeta dudas">
   <div class="carpeta-cab">
     <span class="ruta">📎 Órdenes de carga sin su albarán</span>
-    <span class="destino">se pegan solas al PDF de su albarán en cuanto se escanee; si el número leído no es el bueno, ponlo a mano</span>
+    <span class="destino">cada una se pega sola al PDF del primer albarán de su rango en cuanto se escanee; si el número leído no es el bueno, ponlo a mano</span>
   </div>
   <div class="rejilla">
   {% for o in ordenes %}
@@ -71,7 +71,7 @@
       <div class="pie">
         <div class="nombre">Orden de carga</div>
         <div class="mini">cita el albarán: <strong>{{ o['ref_texto'] or '(no se ha leído)' }}</strong>
-          {% if o['refs_l']|length > 1 %}<br>= {{ o['refs_l']|join(' y ') }}{% endif %}</div>
+          {% if o['rango']|length > 1 %}<br>rango del {{ o['rango'][0] }} al {{ o['rango'][-1] }} · va con el primero{% endif %}</div>
         {% if o['entregados'] %}<div class="mini" style="color:var(--aviso)">{{ o['entregados']|join(', ') }} ya se entregó sin ella</div>{% endif %}
         <form method="post" action="{{ url_for('anexo_unir', xid=o['id']) }}">
           <input type="text" name="numero" value="{{ o['refs_l'][0] if o['refs_l'] else '' }}" placeholder="Nº del albarán" required>

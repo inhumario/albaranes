@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.8.2'
+VERSION = '0.8.3'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -431,8 +431,8 @@ def pegar_anexo(anexo, albaran, con: sqlite3.Connection) -> None:
 
 
 def unir_anexos(con: sqlite3.Connection) -> None:
-    """Pega cada orden de carga suelta al albarán que cita, si ya existe y no se ha
-    entregado. Si cita varios números y solo hay uno, va a ese; si hay varios, a todos."""
+    """Pega cada orden de carga suelta al albarán que cita (el primero del rango), si ya
+    existe y no se ha entregado."""
     for anexo in con.execute('SELECT * FROM anexos WHERE unido_a IS NULL').fetchall():
         refs = json.loads(anexo['refs'] or '[]')
         if not refs:
@@ -584,7 +584,9 @@ def revision():
             refs = json.loads(o['refs'] or '[]')
             ya = con.execute(f"SELECT numero FROM albaranes WHERE numero IN ({','.join('?' * len(refs))}) "
                              "AND estado='entregado'", refs).fetchall() if refs else []
-            ordenes.append({**dict(o), 'refs_l': refs, 'entregados': [r['numero'] for r in ya]})
+            rango = procesador.numeros_citados(o['ref_texto'])
+            ordenes.append({**dict(o), 'refs_l': refs, 'rango': rango,
+                            'entregados': [r['numero'] for r in ya]})
     grupos = {}  # carpeta → {cliente, destino, albaranes}
     for a in filas:
         if a['estado'] != 'colocado':
