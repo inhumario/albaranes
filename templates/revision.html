@@ -37,13 +37,41 @@
       <div class="pie">
         <div class="nombre">{{ a['numero'] or '(sin número)' }}</div>
         <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · {{ a['cliente'] or a['emisor'] or 'emisor desconocido' }}</div>
+        <div class="mini">{% if a['fecha_doc'] %}📅 {{ a['fecha_doc'][8:10] }}/{{ a['fecha_doc'][5:7] }}/{{ a['fecha_doc'][:4] }}{% else %}<span style="color:var(--aviso)">📅 sin fecha leída · colocado por la del escaneo</span>{% endif %}</div>
         <form method="post" action="{{ url_for('albaran_corregir', aid=a['id']) }}">
           <input type="text" name="numero" value="{{ a['numero'] or '' }}" placeholder="Nº del albarán" required>
+          <input type="date" name="fecha" value="{{ a['fecha_doc'] or '' }}" title="Fecha del albarán">
           <select name="cliente_id">
             <option value="">(sin cliente)</option>
             {% for c in clientes %}<option value="{{ c['id'] }}" {{ 'selected' if c['id']==a['cliente_id'] }}>{{ c['nombre'] }}</option>{% endfor %}
           </select>
           <button class="boton">Colocar</button>
+        </form>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if ordenes %}
+<div class="carpeta dudas">
+  <div class="carpeta-cab">
+    <span class="ruta">📎 Órdenes de carga sin su albarán</span>
+    <span class="destino">se pegan solas al PDF de su albarán en cuanto se escanee; si el número leído no es el bueno, ponlo a mano</span>
+  </div>
+  <div class="rejilla">
+  {% for o in ordenes %}
+    <div class="doc">
+      <a href="{{ url_for('anexo_pdf', xid=o['id']) }}" target="_blank"><img src="{{ url_for('anexo_miniatura', xid=o['id']) }}" alt="" loading="lazy"></a>
+      <div class="pie">
+        <div class="nombre">Orden de carga</div>
+        <div class="mini">cita el albarán: <strong>{{ o['ref_texto'] or '(no se ha leído)' }}</strong>
+          {% if o['refs_l']|length > 1 %}<br>= {{ o['refs_l']|join(' y ') }}{% endif %}</div>
+        {% if o['entregados'] %}<div class="mini" style="color:var(--aviso)">{{ o['entregados']|join(', ') }} ya se entregó sin ella</div>{% endif %}
+        <form method="post" action="{{ url_for('anexo_unir', xid=o['id']) }}">
+          <input type="text" name="numero" value="{{ o['refs_l'][0] if o['refs_l'] else '' }}" placeholder="Nº del albarán" required>
+          <button class="boton">Unir a ese albarán</button>
         </form>
       </div>
     </div>
@@ -69,11 +97,14 @@
       <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
       <div class="pie">
         <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
+        {% if a['adjuntos'] %}<div class="adjunto">📎 con {{ a['adjuntos'] }}</div>{% endif %}
         <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}{% if a['confianza']=='corregido' %} · corregido a mano{% endif %}</div>
+        <div class="mini">{% if a['fecha_doc'] %}📅 {{ a['fecha_doc'][8:10] }}/{{ a['fecha_doc'][5:7] }}/{{ a['fecha_doc'][:4] }}{% else %}<span style="color:var(--aviso)">📅 sin fecha leída · colocado por la del escaneo</span>{% endif %}</div>
         <details>
           <summary>Corregir</summary>
           <form method="post" action="{{ url_for('albaran_corregir', aid=a['id']) }}">
             <input type="text" name="numero" value="{{ a['numero'] }}" required>
+            <input type="date" name="fecha" value="{{ a['fecha_doc'] or '' }}" title="Fecha del albarán">
             <select name="cliente_id">
               <option value="">(sin cliente)</option>
               {% for c in clientes %}<option value="{{ c['id'] }}" {{ 'selected' if c['id']==a['cliente_id'] }}>{{ c['nombre'] }}</option>{% endfor %}
@@ -88,7 +119,7 @@
 </div>
 {% endfor %}
 
-{% if not grupos and not dudosos and not en_curso %}
+{% if not grupos and not dudosos and not en_curso and not ordenes %}
 <div class="aviso">No hay nada pendiente de revisar. Sube un escaneo desde <a href="{{ url_for('index') }}">Subir escaneo</a>.</div>
 {% endif %}
 

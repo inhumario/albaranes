@@ -13,7 +13,7 @@
   <label>Nombre del fichero <span class="mini">(lo que pide este cliente; por defecto, solo el número)</span></label>
   <input type="text" name="nombre_formato" id="formato" value="{{ c['nombre_formato'] if c and c['nombre_formato'] else '{numero}' }}">
   <p class="mini" style="margin:.3rem 0 0">Puedes combinar texto fijo con: <code>{numero}</code> nº del albarán ·
-    <code>{fecha}</code> AAAAMMDD · <code>{año}</code> <code>{mes}</code> <code>{dia}</code> ·
+    <code>{fecha}</code> fecha del albarán AAAAMMDD · <code>{año}</code> <code>{mes}</code> <code>{dia}</code> ·
     <code>{cliente}</code>. Por ejemplo <code>ALB_{numero}</code> o <code>{fecha}_{numero}</code>.<br>
     Así quedará: <strong id="ejemplo-nombre"></strong>
     <br>Se aplica a lo que se procese desde ahora; lo ya archivado conserva su nombre.</p>

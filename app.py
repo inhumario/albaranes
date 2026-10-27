@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.7.2'
+VERSION = '0.8.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -103,6 +103,26 @@ def init_db() -> None:
         # migración v0.3 → v0.4: progreso del lote (páginas leídas)
         try:
             con.execute('ALTER TABLE lotes ADD COLUMN hechas INTEGER NOT NULL DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        # v0.8: órdenes de carga (y otros anexos) que van pegadas al PDF de su albarán
+        con.execute('''CREATE TABLE IF NOT EXISTS anexos (
+            id INTEGER PRIMARY KEY,
+            lote_id INTEGER NOT NULL,
+            tipo TEXT NOT NULL DEFAULT 'orden_carga',
+            ref_texto TEXT NOT NULL DEFAULT '',   -- lo que pone en su campo ALBARÁN
+            refs TEXT NOT NULL DEFAULT '[]',      -- números de albarán que cita (JSON)
+            ruta TEXT NOT NULL,
+            paginas INTEGER NOT NULL DEFAULT 1,
+            unido_a INTEGER,                      -- albarán al que se ha pegado
+            creado TEXT NOT NULL)''')
+        try:
+            con.execute("ALTER TABLE albaranes ADD COLUMN adjuntos TEXT NOT NULL DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+        # v0.8: fecha propia del albarán (la que decide año/mes de la carpeta)
+        try:
+            con.execute("ALTER TABLE albaranes ADD COLUMN fecha_doc TEXT")
         except sqlite3.OperationalError:
             pass
         # v0.6: cómo quiere cada cliente el nombre del fichero y sus instrucciones de entrega
@@ -236,6 +256,21 @@ def destino_libre(carpeta: Path, nombre: str, propio: Path | None = None) -> Pat
     return destino
 
 
+def fecha_valida(texto) -> datetime | None:
+    """La fecha leída del albarán, si es creíble (ni futura ni de hace más de 3 años)."""
+    try:
+        f = datetime.strptime(str(texto)[:10], '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return None
+    hoy = datetime.now()
+    return f if (hoy.year - 3) <= f.year and f <= hoy.replace(hour=23, minute=59) else None
+
+
+def fecha_de(a) -> datetime:
+    """Fecha con la que se coloca un albarán: la suya; si no se leyó, la del escaneo."""
+    return fecha_valida(a['fecha_doc']) or datetime.fromisoformat(a['creado'])
+
+
 def carpeta_de(cliente, emisor: str, cuando: datetime) -> Path:
     nombre = cliente['nombre'] if cliente else (emisor or 'sin-clasificar')
     return ARCHIVO / procesador.normaliza(nombre) / f'{cuando:%Y}' / f'{cuando:%m}'
@@ -255,14 +290,28 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
         ahora = datetime.now()
         with db() as con:
             revisar_antes = cfg_get(con, 'revisar_antes') == '1'
-            for g in grupos:
+            for n, g in enumerate(grupos):
+                if g.get('tipo') == 'orden_carga':
+                    carpeta = ARCHIVO / '_ordenes-de-carga'
+                    carpeta.mkdir(parents=True, exist_ok=True)
+                    destino = destino_libre(carpeta, f'orden-lote{lote_id}-{n + 1}.pdf')
+                    with destino.open('wb') as f:
+                        g['writer'].write(f)
+                    con.execute('INSERT INTO anexos (lote_id, ref_texto, refs, ruta, paginas, creado) '
+                                'VALUES (?,?,?,?,?,?)',
+                                (lote_id, g['ref_texto'], json.dumps(g['refs']),
+                                 str(destino.relative_to(DATA)), len(g['paginas']),
+                                 ahora.isoformat(timespec='seconds')))
+                    continue
                 cliente = casar_cliente(g['emisor'], con)
-                carpeta = carpeta_de(cliente, g['emisor'], ahora)
+                fecha_doc = fecha_valida(g.get('fecha'))
+                cuando = fecha_doc or ahora  # año/mes de la carpeta: los del albarán
+                carpeta = carpeta_de(cliente, g['emisor'], cuando)
                 if g['revisar']:
                     carpeta = ARCHIVO / 'REVISAR'
                 carpeta.mkdir(parents=True, exist_ok=True)
                 if g['numero'] and not g['revisar']:
-                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], ahora)
+                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando)
                 else:
                     nombre = f"{g['numero'] or 'sin-numero-lote%d-p%d' % (lote_id, g['paginas'][0]+1)}.pdf"
                 destino = destino_libre(carpeta, nombre)
@@ -277,15 +326,18 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     estado = estado_final(cliente)
                 cur = con.execute(
                     'INSERT INTO albaranes (lote_id, cliente_id, numero, emisor, paginas,'
-                    ' confianza, ruta, estado, creado) VALUES (?,?,?,?,?,?,?,?,?)',
+                    ' confianza, ruta, estado, creado, fecha_doc) VALUES (?,?,?,?,?,?,?,?,?,?)',
                     (lote_id, cliente['id'] if cliente else None, g['numero'], g['emisor'],
                      len(g['paginas']), g['confianza'], str(destino.relative_to(DATA)),
-                     estado, ahora.isoformat(timespec='seconds')))
+                     estado, ahora.isoformat(timespec='seconds'),
+                     f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None))
                 if estado == 'pendiente_entrega' and cliente['auto_entrega']:
                     resultado = entregar(cur.lastrowid, con)
                     if resultado != 'ok':
                         con.execute('UPDATE albaranes SET entrega_nota=? WHERE id=?',
                                     (resultado, cur.lastrowid))
+            # las órdenes de carga se pegan a su albarán, venga en este escaneo o en otro
+            unir_anexos(con)
             con.execute('UPDATE lotes SET estado=?, paginas=? WHERE id=?',
                         ('procesado', sum(len(g['paginas']) for g in grupos), lote_id))
     except Exception as e:  # el lote nunca se queda en 'procesando' en silencio
@@ -344,6 +396,37 @@ def smtp_config(con: sqlite3.Connection) -> dict | None:
     return cfg if cfg['host'] and cfg['usuario'] else None
 
 
+def pegar_anexo(anexo, albaran, con: sqlite3.Connection) -> None:
+    """Añade las hojas de un anexo al final del PDF del albarán (lo que recibe el cliente)."""
+    from pypdf import PdfReader, PdfWriter
+    w = PdfWriter()
+    for ruta in (albaran['ruta'], anexo['ruta']):
+        for pagina in PdfReader(str(DATA / ruta)).pages:
+            w.add_page(pagina)
+    tmp = (DATA / albaran['ruta']).with_suffix('.tmp')
+    with tmp.open('wb') as f:
+        w.write(f)
+    tmp.replace(DATA / albaran['ruta'])
+    adjuntos = ', '.join(x for x in (albaran['adjuntos'], 'orden de carga') if x)
+    con.execute('UPDATE albaranes SET paginas=paginas+?, adjuntos=? WHERE id=?',
+                (anexo['paginas'], adjuntos, albaran['id']))
+    con.execute('UPDATE anexos SET unido_a=? WHERE id=?', (albaran['id'], anexo['id']))
+
+
+def unir_anexos(con: sqlite3.Connection) -> None:
+    """Pega cada orden de carga suelta al albarán que cita, si ya existe y no se ha
+    entregado. Si cita varios números y solo hay uno, va a ese; si hay varios, a todos."""
+    for anexo in con.execute('SELECT * FROM anexos WHERE unido_a IS NULL').fetchall():
+        refs = json.loads(anexo['refs'] or '[]')
+        if not refs:
+            continue
+        destinos = con.execute(
+            f"SELECT * FROM albaranes WHERE numero IN ({','.join('?' * len(refs))}) "
+            "AND estado != 'entregado' ORDER BY numero", refs).fetchall()
+        for alb in destinos:
+            pegar_anexo(anexo, alb, con)
+
+
 def aprobar(albaran_id: int, con: sqlite3.Connection) -> str:
     """Da por bueno un albarán colocado: lo entrega a su cliente o lo deja archivado."""
     a = con.execute('SELECT a.cliente_id, c.modo_entrega FROM albaranes a '
@@ -368,6 +451,8 @@ def inicio():
         n = dict(con.execute('SELECT estado, COUNT(*) FROM albaranes GROUP BY estado').fetchall())
         leyendo = con.execute("SELECT COUNT(*) FROM lotes WHERE estado='procesando'").fetchone()[0]
         n_clientes = con.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
+        n['revisar'] = n.get('revisar', 0) + con.execute(
+            'SELECT COUNT(*) FROM anexos WHERE unido_a IS NULL').fetchone()[0]
     accesos = [
         {'url': url_for('index'), 'nombre': 'Subir escaneo', 'icono': 'subir', 'color': 'coral',
          'aviso': f'{leyendo} leyéndose' if leyendo else ''},
@@ -474,6 +559,12 @@ def revision():
             "WHERE a.estado IN ('colocado','revisar') ORDER BY c.nombre, a.numero").fetchall()
         clientes = con.execute('SELECT id, nombre FROM clientes ORDER BY nombre').fetchall()
         revisar_antes = cfg_get(con, 'revisar_antes') == '1'
+        ordenes = []
+        for o in con.execute('SELECT * FROM anexos WHERE unido_a IS NULL ORDER BY id').fetchall():
+            refs = json.loads(o['refs'] or '[]')
+            ya = con.execute(f"SELECT numero FROM albaranes WHERE numero IN ({','.join('?' * len(refs))}) "
+                             "AND estado='entregado'", refs).fetchall() if refs else []
+            ordenes.append({**dict(o), 'refs_l': refs, 'entregados': [r['numero'] for r in ya]})
     grupos = {}  # carpeta → {cliente, destino, albaranes}
     for a in filas:
         if a['estado'] != 'colocado':
@@ -484,7 +575,7 @@ def revision():
                                         'albaranes': []})
         g['albaranes'].append(a)
     dudosos = [a for a in filas if a['estado'] == 'revisar']
-    return render_template('revision.html', en_curso=en_curso, grupos=grupos,
+    return render_template('revision.html', en_curso=en_curso, grupos=grupos, ordenes=ordenes,
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
                            n_colocados=sum(len(g['albaranes']) for g in grupos.values()))
 
@@ -590,27 +681,66 @@ def albaran_corregir(aid):
     """Corrige número y/o cliente de un albarán y lo vuelve a colocar en su carpeta."""
     numero = ''.join(request.form.get('numero', '').split())
     cid = request.form.get('cliente_id') or None
+    fecha_nueva = fecha_valida(request.form.get('fecha', ''))
     if not numero:
         flash('Pon el número del albarán.')
         return redirect(url_for('revision'))
     with db() as con:
         a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
         cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone() if cid else None
-        carpeta = carpeta_de(cliente, a['emisor'], datetime.fromisoformat(a['creado']))
+        cuando = fecha_nueva or fecha_de(a)
+        carpeta = carpeta_de(cliente, a['emisor'], cuando)
         carpeta.mkdir(parents=True, exist_ok=True)
         origen = DATA / a['ruta']
-        nombre = nombre_fichero(cliente, numero, a['emisor'], datetime.fromisoformat(a['creado']))
+        nombre = nombre_fichero(cliente, numero, a['emisor'], cuando)
         if (carpeta / nombre).exists() and carpeta / nombre != origen:
             flash(f'Ya hay un albarán con el nombre {nombre} en {carpeta.relative_to(ARCHIVO)}.')
             return redirect(url_for('revision'))
         destino = carpeta / nombre
         origen.rename(destino)
         con.execute("UPDATE albaranes SET numero=?, cliente_id=?, ruta=?, confianza='corregido', "
-                    "estado='colocado', entrega_nota='' WHERE id=?",
-                    (numero, cliente['id'] if cliente else None,
-                     str(destino.relative_to(DATA)), aid))
+                    "estado='colocado', entrega_nota='', fecha_doc=? WHERE id=?",
+                    (numero, cliente['id'] if cliente else None, str(destino.relative_to(DATA)),
+                     f'{fecha_nueva:%Y-%m-%d}' if fecha_nueva else a['fecha_doc'], aid))
     flash(f'Albarán {numero} colocado.')
     return redirect(url_for('revision'))
+
+
+@app.route('/anexo/<int:xid>/unir', methods=['POST'])
+@requiere_acceso
+def anexo_unir(xid):
+    """Pega a mano una orden de carga al albarán que se indique por su número."""
+    numero = ''.join(request.form.get('numero', '').split())
+    with db() as con:
+        anexo = con.execute('SELECT * FROM anexos WHERE id=?', (xid,)).fetchone()
+        alb = con.execute('SELECT * FROM albaranes WHERE numero=? ORDER BY id DESC', (numero,)).fetchone()
+        if not anexo or anexo['unido_a']:
+            flash('Esa orden de carga ya está unida.')
+        elif not alb:
+            flash(f'No hay ningún albarán {numero} escaneado todavía. Cuando llegue, se unirá solo.')
+            con.execute('UPDATE anexos SET refs=? WHERE id=?', (json.dumps([numero]), xid))
+        elif alb['estado'] == 'entregado':
+            flash(f'El albarán {numero} ya se entregó: no se toca lo que ya tiene el cliente.')
+        else:
+            pegar_anexo(anexo, alb, con)
+            flash(f'Orden de carga unida al albarán {numero}.')
+    return redirect(url_for('revision'))
+
+
+@app.route('/anexo/<int:xid>/pdf')
+@requiere_acceso
+def anexo_pdf(xid):
+    with db() as con:
+        a = con.execute('SELECT ruta FROM anexos WHERE id=?', (xid,)).fetchone()
+    return send_file(DATA / a['ruta'], download_name=Path(a['ruta']).name)
+
+
+@app.route('/anexo/<int:xid>/miniatura')
+@requiere_acceso
+def anexo_miniatura(xid):
+    with db() as con:
+        a = con.execute('SELECT ruta, creado FROM anexos WHERE id=?', (xid,)).fetchone()
+    return miniatura_de(DATA / a['ruta'], f"anexo|{a['ruta']}|{a['creado']}")
 
 
 @app.route('/albaran/<int:aid>/miniatura')
@@ -618,9 +748,12 @@ def albaran_corregir(aid):
 def albaran_miniatura(aid):
     with db() as con:
         a = con.execute('SELECT ruta, creado FROM albaranes WHERE id=?', (aid,)).fetchone()
-    pdf = DATA / a['ruta']
-    # clave por ruta + fecha: SQLite reutiliza ids cuando se vacía la tabla
-    clave = hashlib.sha1(f"{a['ruta']}|{a['creado']}|{pdf.stat().st_mtime}".encode()).hexdigest()
+    return miniatura_de(DATA / a['ruta'], f"{a['ruta']}|{a['creado']}")
+
+
+def miniatura_de(pdf: Path, base: str):
+    # clave por ruta + fecha + mtime: SQLite reutiliza ids cuando se vacía la tabla
+    clave = hashlib.sha1(f"{base}|{pdf.stat().st_mtime}".encode()).hexdigest()
     png = DATA / 'miniaturas' / f'{clave}.png'
     if not png.exists():
         png.parent.mkdir(parents=True, exist_ok=True)
@@ -759,9 +892,11 @@ def albaran_marcar(aid):
 def lote_borrar(lid):
     """Borra un lote entero (registros y PDFs archivados) para poder rehacerlo."""
     with db() as con:
-        for a in con.execute('SELECT ruta FROM albaranes WHERE lote_id=?', (lid,)):
+        for a in con.execute('SELECT ruta FROM albaranes WHERE lote_id=? UNION ALL '
+                             'SELECT ruta FROM anexos WHERE lote_id=?', (lid, lid)):
             (DATA / a['ruta']).unlink(missing_ok=True)
         con.execute('DELETE FROM albaranes WHERE lote_id=?', (lid,))
+        con.execute('DELETE FROM anexos WHERE lote_id=?', (lid,))
         con.execute('DELETE FROM lotes WHERE id=?', (lid,))
     flash(f'Lote {lid} borrado (registros y archivos). Puedes volver a subir el escaneo.')
     return redirect(url_for('index'))

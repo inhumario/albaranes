@@ -21,16 +21,38 @@ from pypdf import PdfReader, PdfWriter
 MODELO = 'claude-haiku-4-5-20251001'
 DPI = 150
 
-PROMPT = """Esta imagen es una página escaneada de un albarán de entrega (delivery note).
+PROMPT = """Esta imagen es una página escaneada de un documento de transporte: normalmente un
+albarán de entrega (delivery note), pero puede ser otro documento, como una ORDEN DE CARGA.
 Extrae en JSON estricto, sin nada más:
 {
+  "tipo": "albaran si es un albarán / delivery note; orden_carga si es una ORDEN DE CARGA (u otro documento de transporte que no es un albarán pero cita uno en un campo ALBARÁN); otro si no es ninguno de los dos",
+  "albaranes_ref": "solo si tipo es orden_carga: el texto del campo ALBARÁN tal cual (p.ej. '80465556-5568'); si no, null",
   "emisor": "marca principal del membrete, en minúsculas, UNA palabra si es posible (p.ej. 'delaviuda', no 'delaviuda alimentación s.a.u.')",
   "numero": "el número identificador del albarán tal cual aparece (junto a etiquetas como DELIVERY NOTE, ALBARÁN Nº, Nº DOCUMENTO...). Solo el número, sin espacios",
   "hoja": "valor del campo SHEET/HOJA si existe, si no null",
+  "fecha": "fecha del albarán en formato AAAA-MM-DD. Si hay fecha de carga/expedición (LOADING, FECHA CARGA, FECHA SALIDA) usa SIEMPRE esa, aunque haya también fecha de entrega (DELIVERY): nunca la de entrega. Si no hay de carga, la de emisión del documento (DATE, FECHA). null si no hay ninguna. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
   "es_continuacion": "true solo si la página claramente NO es la primera hoja de un albarán (no tiene cabecera con número propio)",
   "confianza": "alta|media|baja según lo legible que sea el número"
 }
-Si no encuentras ningún número de albarán, pon numero: null y confianza: "baja"."""
+Si no encuentras ningún número de albarán, pon numero: null y confianza: "baja".
+Si tipo es orden_carga u otro, numero: null (el número que cite va en albaranes_ref)."""
+
+
+def numeros_citados(texto) -> list[str]:
+    """Números de albarán que cita una orden de carga. Entiende la forma abreviada
+    «80465556-5568» (el segundo repite los primeros dígitos del primero: 80465568)."""
+    if not texto:
+        return []
+    trozos = re.findall(r'\d+', str(texto))
+    numeros, base = [], ''
+    for t in trozos:
+        if base and len(t) < len(base):
+            t = base[:len(base) - len(t)] + t
+        else:
+            base = t
+        if t not in numeros:
+            numeros.append(t)
+    return numeros
 
 _cliente_api = None
 
@@ -85,6 +107,9 @@ def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
     datos = base64.standard_b64encode(png.read_bytes()).decode()
     m = re.search(r'\{.*\}', _pedir(datos, PROMPT), re.S)
     info = json.loads(m.group(0)) if m else {'numero': None, 'confianza': 'baja'}
+    if (info.get('tipo') or 'albaran') != 'albaran':
+        info['numero'] = None  # una orden de carga no es un albarán: no se verifica su número
+        return info
     if info.get('numero'):
         with tempfile.TemporaryDirectory() as tmp:
             pref = Path(tmp) / 'v'
@@ -117,6 +142,17 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
             info = _analizar_pagina(png, pdf, i)
             if avance:
                 avance(i + 1, len(pngs))
+            if (info.get('tipo') or 'albaran') == 'orden_carga':
+                # documento anexo: se une luego al PDF del albarán que cita
+                if actual:
+                    grupos.append(actual)
+                    actual = None
+                grupos.append({'tipo': 'orden_carga', 'numero': None,
+                               'emisor': info.get('emisor') or '', 'fecha': info.get('fecha'),
+                               'ref_texto': info.get('albaranes_ref') or '',
+                               'refs': numeros_citados(info.get('albaranes_ref')),
+                               'confianza': info.get('confianza', 'media'), 'paginas': [i]})
+                continue
             numero = info.get('numero')
             cont = str(info.get('es_continuacion')).lower() == 'true'
             if actual and (numero == actual['numero'] or (cont and not numero)):
@@ -124,13 +160,14 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                 continue
             if actual:
                 grupos.append(actual)
-            actual = {'numero': numero, 'emisor': info.get('emisor') or '',
+            actual = {'tipo': 'albaran', 'numero': numero, 'emisor': info.get('emisor') or '',
+                      'fecha': info.get('fecha'),
                       'confianza': info.get('confianza', 'baja'), 'paginas': [i]}
         if actual:
             grupos.append(actual)
 
     for g in grupos:
-        g['revisar'] = not g['numero'] or g['confianza'] == 'baja'
+        g['revisar'] = g['tipo'] == 'albaran' and (not g['numero'] or g['confianza'] == 'baja')
         w = PdfWriter()
         for idx in g['paginas']:
             w.add_page(lector.pages[idx])
