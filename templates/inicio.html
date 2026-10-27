@@ -6,7 +6,7 @@ body{background:linear-gradient(135deg,#F7F7F8 0%,#EEEEF1 55%,#FBEDED 100%) fixe
 .inicio{max-width:860px;margin:4vh auto 0;text-align:center}
 .logo-inicio{height:88px;width:auto;max-width:90%;display:block;margin:0 auto .8rem}
 .inicio .saludo{color:var(--gris);font-size:.95rem;margin-bottom:2.2rem}
-.lanzador{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:2rem 1rem;justify-items:center}
+.lanzador{display:flex;flex-wrap:wrap;justify-content:center;gap:2rem 1rem}
 .acceso{display:flex;flex-direction:column;align-items:center;gap:.7rem;text-decoration:none;color:var(--ink);
         width:130px;position:relative}
 .acceso .baldosa{width:96px;height:96px;border-radius:16px;background:#fff;display:flex;align-items:center;
@@ -18,8 +18,8 @@ body{background:linear-gradient(135deg,#F7F7F8 0%,#EEEEF1 55%,#FBEDED 100%) fixe
 @media (max-width:640px){
   .inicio{margin-top:2vh}
   .logo-inicio{height:auto;width:78%}
-  .lanzador{grid-template-columns:repeat(3,1fr);gap:1.4rem .4rem}
-  .acceso{width:100%}
+  .lanzador{gap:1.4rem 0}
+  .acceso{width:33.33%}
   .acceso .baldosa{width:74px;height:74px;border-radius:14px}
   .acceso .baldosa svg{width:46px;height:46px}
   .acceso .nombre{font-size:.86rem}
