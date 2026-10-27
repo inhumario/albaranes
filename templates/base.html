@@ -29,6 +29,7 @@ body{margin:0;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-fo
 .topbar nav a{color:#D8D8DA;padding:6px 10px;border-radius:6px;font-size:13.5px;white-space:nowrap;text-decoration:none}
 .topbar nav a:hover{background:var(--ink-3);color:#fff}
 .topbar nav a.activo{background:var(--ink-3);color:#fff;font-weight:600}
+.cuenta-menu{background:var(--coral);color:var(--ink);border-radius:999px;font-size:11px;font-weight:700;padding:1px 7px;margin-left:3px}
 .topbar .salir{color:#9C9CA0;font-size:12.5px;padding:6px 8px;border-radius:6px;text-decoration:none;margin-left:auto;white-space:nowrap}
 .topbar .salir:hover{background:var(--ink-3);color:#fff}
 main{max-width:1000px;margin:0 auto;padding:1.2rem 16px 3rem}
@@ -148,7 +149,9 @@ main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--cora
       <a href="{{ url_for('index') }}" class="{{ 'activo' if request.endpoint in ('index',) }}">Subir escaneo</a>
       <a href="{{ url_for('revision') }}" class="{{ 'activo' if request.endpoint in ('revision',) }}">Revisión</a>
       <a href="{{ url_for('albaranes') }}" class="{{ 'activo' if request.endpoint in ('albaranes','carpeta_zip') }}">Archivo</a>
-      <a href="{{ url_for('pendientes') }}" class="{{ 'activo' if request.endpoint in ('pendientes','portal') }}">Por entregar</a>
+      {% if n_por_entregar or request.endpoint in ('pendientes','portal') %}
+      <a href="{{ url_for('pendientes') }}" class="{{ 'activo' if request.endpoint in ('pendientes','portal') }}">Por entregar{% if n_por_entregar %} <span class="cuenta-menu">{{ n_por_entregar }}</span>{% endif %}</a>
+      {% endif %}
       <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint in ('clientes','cliente_form') }}">Clientes</a>
       <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint in ('ajustes',) }}">Ajustes</a>
   </nav>

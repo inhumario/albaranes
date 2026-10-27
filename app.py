@@ -30,7 +30,7 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import procesador
 
-VERSION = '0.7.1'
+VERSION = '0.7.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -162,6 +162,17 @@ def requiere_acceso(f):
             return redirect(url_for('login', siguiente=request.path))
         return f(*args, **kwargs)
     return envoltura
+
+
+@app.context_processor
+def atascados():
+    """Cuántos albaranes aprobados no han llegado a su cliente: «Por entregar» solo se
+    enseña (baldosa y pestaña) cuando hay alguno (decisión de Mario 27-10)."""
+    if not session.get('acceso'):
+        return {'n_por_entregar': 0}
+    with db() as con:
+        n = con.execute("SELECT COUNT(*) FROM albaranes WHERE estado='pendiente_entrega'").fetchone()[0]
+    return {'n_por_entregar': n}
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -372,6 +383,7 @@ def inicio():
         {'url': url_for('ajustes'), 'nombre': 'Ajustes', 'icono': 'ajustes', 'color': 'tinta',
          'aviso': ''},
     ]
+    accesos = [a for a in accesos if a['nombre'] != 'Por entregar' or n.get('pendiente_entrega')]
     return render_template('inicio.html', accesos=accesos, n_clientes=n_clientes)
 
 
