@@ -32,7 +32,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.0.0'
+VERSION = '1.0.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -504,8 +504,11 @@ def fechas_desde_ordenes(con: sqlite3.Connection) -> list[str]:
                     and int(ini) <= int(a['numero']) <= int(fin):
                 fecha = fecha_valida(o['fecha'])
                 if fecha:
-                    cambios.append(f"📅 {Path(a['ruta']).name}: toma la fecha de carga de su orden "
-                                   f"({fecha:%d/%m/%Y}) · {recolocar(con, a, fecha)}")
+                    antes = Path(a['ruta']).parent
+                    movido = recolocar(con, a, fecha)
+                    if f'/{fecha:%Y}/{fecha:%m}' not in str(antes) + '/':  # solo si cambia de carpeta
+                        cambios.append(f"📅 {Path(a['ruta']).name}: toma la fecha de carga de su orden "
+                                       f"({fecha:%d/%m/%Y}) · {movido}")
                 break
     return cambios
 

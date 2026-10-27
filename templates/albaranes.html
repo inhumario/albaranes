@@ -75,6 +75,7 @@
       <div class="pie">
         <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
         {% if a['adjuntos'] %}<div class="adjunto">📎 con {{ a['adjuntos'] }}</div>{% endif %}
+        {% if a['peso_kg'] or a['pales'] %}<div class="mini">{% if a['peso_kg'] %}{{ ('{:,.3f}'.format(a['peso_kg'])).replace(',', 'X').replace('.', ',').replace('X', '.') }} kg{% endif %}{% if a['pales'] %} · {{ '%g'|format(a['pales']) }} palé{{ 's' if a['pales'] != 1 }}{% endif %}{% if a['destino'] %} · {{ a['destino'] }}{% endif %}</div>{% endif %}
         <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }} · {% if a['fecha_doc'] %}albarán del {{ a['fecha_doc'][8:10] }}/{{ a['fecha_doc'][5:7] }}/{{ a['fecha_doc'][:4] }}{% else %}escaneado {{ a['creado'][8:10] }}/{{ a['creado'][5:7] }} (sin fecha leída){% endif %}</div>
         {% if a['estado'] == 'entregado' %}
           <div class="envio si">✓ {{ 'Subido' if a['modo_entrega'] == 'portal' else 'Enviado' }}{% if a['entregado_el'] %} el {{ a['entregado_el'][8:10] }}/{{ a['entregado_el'][5:7] }} a las {{ a['entregado_el'][11:16] }}{% endif %}</div>
