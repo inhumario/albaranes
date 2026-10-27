@@ -28,9 +28,11 @@ from pathlib import Path
 from flask import (Flask, flash, redirect, render_template, request,
                    send_file, session, url_for)
 
+import exportar
+import factura as lector_factura
 import procesador
 
-VERSION = '0.9.1'
+VERSION = '1.0.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -120,6 +122,20 @@ def init_db() -> None:
             con.execute("ALTER TABLE albaranes ADD COLUMN adjuntos TEXT NOT NULL DEFAULT ''")
         except sqlite3.OperationalError:
             pass
+        # v1.0: datos del albarán para el Excel de liquidación y facturas de transporte
+        for col in ('peso_kg REAL', 'pales REAL', 'destino TEXT'):
+            try:
+                con.execute(f'ALTER TABLE albaranes ADD COLUMN {col}')
+            except sqlite3.OperationalError:
+                pass
+        con.execute('''CREATE TABLE IF NOT EXISTS facturas (
+            id INTEGER PRIMARY KEY,
+            fichero TEXT NOT NULL,
+            ruta TEXT NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'leyendo',   -- leyendo | lista | error: …
+            numero TEXT, fecha TEXT, imp_bruto REAL, cuadra INTEGER,
+            datos TEXT NOT NULL DEFAULT '{}',         -- viajes, extras y albaranes de cada viaje
+            creado TEXT NOT NULL)''')
         # v0.9.1: fecha y rango de la orden de carga (da la fecha de carga a los albaranes que
         # no la traen) y sello de recepción (entre copias repetidas se guarda la sellada)
         for tabla, col in (('anexos', "fecha TEXT"), ('anexos', "rango_ini TEXT"),
@@ -358,11 +374,13 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     estado = estado_final(cliente)
                 cur = con.execute(
                     'INSERT INTO albaranes (lote_id, cliente_id, numero, emisor, paginas,'
-                    ' confianza, ruta, estado, creado, fecha_doc, sellado) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                    ' confianza, ruta, estado, creado, fecha_doc, sellado, peso_kg, pales, destino)'
+                    ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (lote_id, cliente['id'] if cliente else None, g['numero'], g['emisor'],
                      len(g['paginas']), g['confianza'], str(destino.relative_to(DATA)),
                      estado, ahora.isoformat(timespec='seconds'),
-                     f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None, int(bool(g.get('sellado')))))
+                     f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None, int(bool(g.get('sellado'))),
+                     g.get('peso'), g.get('pales'), g.get('destino')))
                 if estado == 'pendiente_entrega' and cliente['auto_entrega']:
                     resultado = entregar(cur.lastrowid, con)
                     if resultado != 'ok':
@@ -577,6 +595,8 @@ def inicio():
          'aviso': ''},
         {'url': url_for('pendientes'), 'nombre': 'Por entregar', 'icono': 'entregar', 'color': 'violeta',
          'aviso': f"{n.get('pendiente_entrega', 0)} sin entregar" if n.get('pendiente_entrega') else ''},
+        {'url': url_for('facturas'), 'nombre': 'Facturas', 'icono': 'facturas', 'color': 'naranja',
+         'aviso': ''},
         {'url': url_for('clientes'), 'nombre': 'Clientes', 'icono': 'clientes', 'color': 'verde',
          'aviso': ''},
         {'url': url_for('ajustes'), 'nombre': 'Ajustes', 'icono': 'ajustes', 'color': 'tinta',
@@ -1149,8 +1169,10 @@ def repasar_todo() -> None:
                     cambios.append(f"📎 {nombre}: era una ORDEN DE CARGA (albarán {info.get('albaranes_ref')}, "
                                    f"fecha {info.get('fecha')}) → pasa a orden de carga")
                     continue
-                con.execute('UPDATE albaranes SET sellado=? WHERE id=?',
-                            (int(str(info.get('sellado')).lower() == 'true'), a['id']))
+                con.execute('UPDATE albaranes SET sellado=?, peso_kg=?, pales=?, destino=? WHERE id=?',
+                            (int(str(info.get('sellado')).lower() == 'true'),
+                             procesador._num(info.get('peso_bruto')), procesador._num(info.get('pales')),
+                             (info.get('destino') or '').strip().upper() or None, a['id']))
                 seguro = info.get('numero') and info.get('confianza') != 'baja'
                 if not seguro or info['numero'] != a['numero']:
                     visto = info.get('numero') or 'ilegible'
@@ -1208,6 +1230,135 @@ def ajustes_repasar():
     threading.Thread(target=repasar_todo, daemon=True).start()
     flash('Repaso en marcha: se están releyendo todos los albaranes. El resultado sale aquí.')
     return redirect(url_for('ajustes') + '#repaso')
+
+
+# ------------------------------------------------------------------ facturas
+def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
+    """Pone en cada viaje sus albaranes: los que cita la factura, los de su misma orden de
+    carga y los de la misma fecha de carga (o la víspera) y destino que aún no están en otro
+    viaje. Respeta lo añadido o quitado a mano. Compara los palés con la cantidad facturada."""
+    from datetime import timedelta
+    albs = [dict(r) for r in con.execute(
+        "SELECT numero, fecha_doc, destino, pales, peso_kg FROM albaranes "
+        "WHERE estado != 'descartado' AND numero IS NOT NULL")]
+    por_numero = {a['numero']: a for a in albs}
+    ordenes = con.execute('SELECT rango_ini, rango_fin FROM anexos WHERE rango_ini IS NOT NULL').fetchall()
+    usados = set()
+    for v in datos['viajes']:
+        if exportar.es_linea_suelta({**v, 'albaranes': []}):
+            v['albaranes'], v['estado'] = [], 'suelta'
+            continue
+        lista = [n for n in v['refs'] if n not in v.get('quitados', [])]
+        for o in ordenes:  # misma orden de carga que alguno de los citados
+            ini, fin = o['rango_ini'], o['rango_fin'] or o['rango_ini']
+            if any(n.isdigit() and len(n) == len(ini) and int(ini) <= int(n) <= int(fin) for n in v['refs']):
+                lista += [a['numero'] for a in albs if a['numero'].isdigit() and len(a['numero']) == len(ini)
+                          and int(ini) <= int(a['numero']) <= int(fin)]
+        f = fecha_valida(v.get('fecha'))
+        destino = procesador.normaliza(exportar.sin_tildes(v['destino']))
+        if f and destino:
+            dias = {f'{f:%Y-%m-%d}', f'{f - timedelta(days=1):%Y-%m-%d}'}
+            lista += [a['numero'] for a in albs if a['fecha_doc'] in dias and a['destino']
+                      and destino in procesador.normaliza(exportar.sin_tildes(a['destino']))]
+        lista += v.get('anadidos', [])
+        vistos = []
+        for n in lista:
+            if n not in vistos and n not in v.get('quitados', []) and (n not in usados or n in v['refs']
+                                                                       or n in v.get('anadidos', [])):
+                vistos.append(n)
+        usados.update(vistos)
+        v['albaranes'] = vistos
+        v['faltan'] = [n for n in vistos if n not in por_numero]
+        pales = sum((por_numero.get(n) or {}).get('pales') or 0 for n in vistos)
+        v['pales_albaranes'] = pales
+        cantidad = v.get('cantidad') or 0
+        v['estado'] = ('sin albaranes' if not vistos else 'faltan escaneos' if v['faltan']
+                       else 'ok' if cantidad <= 1 or abs(pales - cantidad) < 0.01 else 'palés no cuadran')
+    return datos
+
+
+def leer_factura_en_segundo_plano(fid: int, pdf: Path) -> None:
+    try:
+        datos = lector_factura.leer_factura(pdf)
+        with db() as con:
+            datos = cruzar_factura(datos, con)
+            con.execute('UPDATE facturas SET estado=?, numero=?, fecha=?, imp_bruto=?, cuadra=?, datos=? '
+                        'WHERE id=?', ('lista', datos['numero'], datos['fecha'], datos['imp_bruto'],
+                                       int(bool(datos['cuadra'])), json.dumps(datos), fid))
+    except Exception as e:
+        with db() as con:
+            con.execute('UPDATE facturas SET estado=? WHERE id=?', (f'error: {e}', fid))
+
+
+@app.route('/facturas', methods=['GET', 'POST'])
+@requiere_acceso
+def facturas():
+    if request.method == 'POST':
+        f = request.files.get('factura')
+        if not f or not f.filename.lower().endswith('.pdf'):
+            flash('Sube la factura en PDF.')
+            return redirect(url_for('facturas'))
+        carpeta = ARCHIVO / '_facturas'
+        carpeta.mkdir(parents=True, exist_ok=True)
+        destino = destino_libre(carpeta, Path(f.filename).name)
+        f.save(destino)
+        with db() as con:
+            fid = con.execute('INSERT INTO facturas (fichero, ruta, creado) VALUES (?,?,?)',
+                              (Path(f.filename).name, str(destino.relative_to(DATA)),
+                               datetime.now().isoformat(timespec='seconds'))).lastrowid
+        threading.Thread(target=leer_factura_en_segundo_plano, args=(fid, destino), daemon=True).start()
+        return redirect(url_for('factura_ver', fid=fid))
+    with db() as con:
+        filas = con.execute('SELECT * FROM facturas ORDER BY id DESC').fetchall()
+    return render_template('facturas.html', filas=filas)
+
+
+@app.route('/factura/<int:fid>', methods=['GET', 'POST'])
+@requiere_acceso
+def factura_ver(fid):
+    with db() as con:
+        fac = con.execute('SELECT * FROM facturas WHERE id=?', (fid,)).fetchone()
+        if not fac:
+            return redirect(url_for('facturas'))
+        datos = json.loads(fac['datos'] or '{}')
+        if request.method == 'POST' and datos.get('viajes'):
+            viaje = request.form.get('viaje')
+            numero = ''.join(request.form.get('numero', '').split())
+            accion = request.form.get('accion')
+            for v in datos['viajes']:
+                if v['viaje'] != viaje:
+                    continue
+                if accion == 'anadir' and numero:
+                    v.setdefault('anadidos', []).append(numero)
+                    v['quitados'] = [n for n in v.get('quitados', []) if n != numero]
+                elif accion == 'quitar' and numero:
+                    v.setdefault('quitados', []).append(numero)
+                    v['anadidos'] = [n for n in v.get('anadidos', []) if n != numero]
+            if accion in ('anadir', 'quitar', 'recruzar'):
+                datos = cruzar_factura(datos, con)
+                con.execute('UPDATE facturas SET datos=? WHERE id=?', (json.dumps(datos), fid))
+            return redirect(url_for('factura_ver', fid=fid) + (f'#v{viaje}' if viaje else ''))
+        albs = {r['numero']: dict(r) for r in con.execute(
+            "SELECT numero, peso_kg, pales, destino, fecha_doc, id FROM albaranes "
+            "WHERE estado != 'descartado' AND numero IS NOT NULL")}
+    return render_template('factura.html', fac=fac, datos=datos, albs=albs)
+
+
+@app.route('/factura/<int:fid>/excel')
+@requiere_acceso
+def factura_excel(fid):
+    import io
+    with db() as con:
+        fac = con.execute('SELECT * FROM facturas WHERE id=?', (fid,)).fetchone()
+        datos = json.loads(fac['datos'])
+        albs = {r['numero']: {'peso': r['peso_kg'], 'pales': r['pales']} for r in con.execute(
+            "SELECT numero, peso_kg, pales FROM albaranes WHERE estado != 'descartado' AND numero IS NOT NULL")}
+        fijos = {'cmr': cfg_get(con, 'excel_cmr', 'NO'),
+                 'codigo': int(cfg_get(con, 'excel_codigo', '20110') or 0) or cfg_get(con, 'excel_codigo'),
+                 'nombre': cfg_get(con, 'excel_nombre', 'TRANS J. ROMERO S.L.')}
+    nombre = f"EXCEL_DELAVIUDA_{exportar.nombre_hoja(datos.get('numero'), datos.get('fecha')).split('(')[0].strip().replace(' ', '_').replace('º', '')}.xls"
+    return send_file(io.BytesIO(exportar.excel(datos, albs, fijos)), as_attachment=True,
+                     download_name=nombre, mimetype='application/vnd.ms-excel')
 
 
 @app.route('/salud')

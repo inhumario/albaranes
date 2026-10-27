@@ -32,12 +32,30 @@ Extrae en JSON estricto, sin nada más:
   "numero": "el número identificador del albarán tal cual aparece (junto a etiquetas como DELIVERY NOTE, ALBARÁN Nº, Nº DOCUMENTO...). Solo el número, sin espacios",
   "hoja": "valor del campo SHEET/HOJA si existe, si no null",
   "fecha": "SOLO la fecha de CARGA en formato AAAA-MM-DD: en un albarán, la de LOADING / Expedición / Fecha de carga / Fecha de salida; en una orden de carga, su campo FECHA. NUNCA la de entrega (DELIVERY, Entrega) ni la del pedido (Nº PEDIDO/FECHA) ni sellos de recepción. Si la casilla de carga o expedición está vacía, null. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
+  "peso_bruto": "solo en albaranes: PESO BRUTO total del albarán en kg, como número con punto decimal (1.138,200 → 1138.2); null si no aparece",
+  "pales": "solo en albaranes: número total de palés (PALLETS / PALES / Nº PALETS) como número; null si no aparece",
+  "destino": "solo en albaranes: población del domicilio de envío de la mercancía, en mayúsculas y sin código postal (p.ej. BARCELONA); null si no aparece",
   "sellado": "true si la hoja lleva sello o firma de recepción del cliente (p.ej. 'CONFORME', fecha de llegada estampada), si no false",
   "es_continuacion": "true solo si la página claramente NO es la primera hoja de un albarán (no tiene cabecera con número propio)",
   "confianza": "alta|media|baja según lo legible que sea el número"
 }
 Si no encuentras ningún número de albarán, pon numero: null y confianza: "baja".
 Si tipo es orden_carga u otro, numero: null (el número que cite va en albaranes_ref)."""
+
+
+def _num(v):
+    """Número del modelo a float: acepta 1138.2, "1138,2" o "1.138,200"."""
+    if v in (None, ''):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).strip().replace(' ', '')
+    if ',' in t:
+        t = t.replace('.', '').replace(',', '.')
+    try:
+        return float(t)
+    except ValueError:
+        return None
 
 
 def numeros_citados(texto) -> list[str]:
@@ -219,6 +237,8 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
             actual = {'tipo': 'albaran', 'numero': numero, 'emisor': info.get('emisor') or '',
                       'hojas': [hoja], 'duplicadas': 0,
                       'sellado': str(info.get('sellado')).lower() == 'true',
+                      'peso': _num(info.get('peso_bruto')), 'pales': _num(info.get('pales')),
+                      'destino': (info.get('destino') or '').strip().upper() or None,
                       'fecha': info.get('fecha'),
                       'confianza': info.get('confianza', 'baja'), 'paginas': [i]}
         if actual:

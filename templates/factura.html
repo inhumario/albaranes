@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% block titulo %}Factura {{ fac['numero'] or '' }} · Albaranes · Inhumario{% endblock %}
+{% block cuerpo %}
+{% if fac['estado'] == 'leyendo' %}<meta http-equiv="refresh" content="4">{% endif %}
+{% macro eur(x) %}{{ ('{:,.2f} €'.format(x or 0)).replace(',', 'X').replace('.', ',').replace('X', '.') }}{% endmacro %}
+<style>
+.resumen{display:flex;gap:.6rem;flex-wrap:wrap;margin:.6rem 0 1rem}
+.resumen .tarjeta{min-width:150px}
+.viaje{background:#fff;border:1px solid var(--borde);border-radius:10px;margin:.8rem 0;overflow:hidden}
+.viaje.mal{border-color:#e3b6b6}
+.viaje-cab{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;padding:.6rem .9rem;background:var(--cab);border-bottom:1px solid var(--borde)}
+.viaje.mal .viaje-cab{background:var(--rojo-f)}
+.viaje-cab .num{font-weight:700;font-size:1.05rem}
+.viaje-cab .imp{margin-left:auto;font-weight:700}
+.viaje table{font-size:.88rem}
+.viaje form.linea input{width:9rem;display:inline-block;padding:.25rem .4rem}
+</style>
+<h1>Factura {{ fac['numero'] or fac['fichero'] }}</h1>
+{% if fac['estado'] == 'leyendo' %}
+  <div class="aviso">Leyendo la factura… (unos 30 segundos)</div>
+{% elif fac['estado'].startswith('error') %}
+  <div class="aviso">No se ha podido leer: {{ fac['estado'] }}</div>
+{% else %}
+  {% set viajes = datos['viajes'] %}
+  {% set reales = viajes|rejectattr('estado', 'equalto', 'suelta')|list %}
+  {% set con_problema = reales|rejectattr('estado', 'equalto', 'ok')|list %}
+  <div class="resumen">
+    <div class="tarjeta"><div class="n">{{ reales|length }}</div><div class="t">viajes</div></div>
+    <div class="tarjeta"><div class="n">{{ reales|map(attribute='albaranes')|map('length')|sum }}</div><div class="t">albaranes</div></div>
+    <div class="tarjeta"><div class="n" style="font-size:1.2rem">{{ eur(datos['imp_bruto']) }}</div>
+      <div class="t">{{ '✓ la suma de líneas cuadra' if datos['cuadra'] else '⚠ las líneas suman ' ~ eur(datos['suma_lineas']) }}</div></div>
+    <div class="tarjeta"><div class="n">{{ con_problema|length }}</div><div class="t">viajes por revisar</div></div>
+  </div>
+  <p><a class="boton" href="{{ url_for('factura_excel', fid=fac['id']) }}">⬇ Descargar Excel</a>
+     <form class="linea" method="post"><input type="hidden" name="accion" value="recruzar">
+       <button class="boton suave" title="Vuelve a buscar los albaranes de cada viaje (tras escanear más)">Volver a cruzar con los albaranes</button></form></p>
+  {% if con_problema %}<div class="aviso">⚠ {{ con_problema|length }} viaje(s) no cuadran o les faltan albaranes escaneados: salen en rojo. Se pueden añadir o quitar albaranes a mano; el Excel sale igualmente con lo que haya.</div>{% endif %}
+
+  {% for v in viajes %}
+  <div class="viaje {{ 'mal' if v['estado'] not in ('ok', 'suelta') }}" id="v{{ v['viaje'] }}">
+    <div class="viaje-cab">
+      <span class="num">Viaje {{ v['viaje'] }}</span>
+      <span>{{ v['fecha'][8:10] ~ '/' ~ v['fecha'][5:7] if v['fecha'] else '' }} · {{ v['destino'] if v['estado'] != 'suelta' else v['descripcion'] }}</span>
+      {% if v['estado'] != 'suelta' %}
+      <span class="mini">palés: factura {{ '%g'|format(v['cantidad'] or 0) }} · albaranes {{ '%g'|format(v['pales_albaranes'] or 0) }}
+        {% if v['estado'] == 'ok' %}✓{% else %}· <strong>{{ v['estado'] }}</strong>{% endif %}</span>
+      {% endif %}
+      <span class="imp">{{ eur(v['importe']) }}{% for e in v['extras'] %} + {{ eur(e['importe']) }}{% endfor %}</span>
+    </div>
+    {% if v['estado'] != 'suelta' %}
+    <div class="tabla-scroll"><table>
+      <tr><th>Albarán</th><th>Peso (kg)</th><th>Palés</th><th>Destino</th><th>Carga</th><th></th></tr>
+      {% for n in v['albaranes'] %}{% set a = albs.get(n) %}
+      <tr>
+        <td>{% if a %}<a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><code>{{ n }}</code></a>{% else %}<code>{{ n }}</code> <span class="mini" style="color:var(--rojo)">no escaneado</span>{% endif %}
+            {% if n in v['refs'] %}<span class="mini">· en la factura</span>{% endif %}</td>
+        <td>{{ '%.3f'|format(a['peso_kg']) if a and a['peso_kg'] is not none else '—' }}</td>
+        <td>{{ '%g'|format(a['pales']) if a and a['pales'] is not none else '—' }}</td>
+        <td class="mini">{{ a['destino'] if a and a['destino'] else '' }}</td>
+        <td class="mini">{{ a['fecha_doc'][8:10] ~ '/' ~ a['fecha_doc'][5:7] if a and a['fecha_doc'] else '' }}</td>
+        <td><form class="linea" method="post"><input type="hidden" name="accion" value="quitar">
+          <input type="hidden" name="viaje" value="{{ v['viaje'] }}"><input type="hidden" name="numero" value="{{ n }}">
+          <button class="boton suave" title="Quitar de este viaje">×</button></form></td>
+      </tr>
+      {% endfor %}
+      {% for e in v['extras'] %}
+      <tr><td colspan="5" class="mini">+ {{ e['concepto'] }}</td><td class="mini">{{ eur(e['importe']) }}</td></tr>
+      {% endfor %}
+    </table></div>
+    <div style="padding:.5rem .9rem">
+      <form class="linea" method="post"><input type="hidden" name="accion" value="anadir">
+        <input type="hidden" name="viaje" value="{{ v['viaje'] }}">
+        <input type="text" name="numero" placeholder="Nº de albarán" required>
+        <button class="boton suave">Añadir a este viaje</button></form>
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+{% endif %}
+{% endblock %}

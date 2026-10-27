@@ -27,7 +27,7 @@ body{background:linear-gradient(135deg,#F7F7F8 0%,#EEEEF1 55%,#FBEDED 100%) fixe
 }
 </style>
 {% set colores = {'coral':('#FF8080','#E96A6A'),'azul':('#4C8DF6','#2D6CDF'),'ambar':('#F6B544','#E8913A'),
-                  'violeta':('#8C6FC9','#5B4B8A'),'verde':('#35B07A','#1F7A50'),'tinta':('#4A4A4E','#111111')} %}
+                  'violeta':('#8C6FC9','#5B4B8A'),'naranja':('#FFB066','#E8833A'),'verde':('#35B07A','#1F7A50'),'tinta':('#4A4A4E','#111111')} %}
 <div class="inicio">
   <img src="{{ url_for('static', filename='logo.png') }}" alt="Inhumario" class="logo-inicio">
   <div class="saludo">Albaranes · digitalización y entrega automática</div>
@@ -53,6 +53,11 @@ body{background:linear-gradient(135deg,#F7F7F8 0%,#EEEEF1 55%,#FBEDED 100%) fixe
         {% elif a.icono == 'entregar' %}
           <path d="M6 30 L58 8 L44 56 L32 38 Z" fill="{{ c1 }}"/>
           <path d="M32 38 L58 8 L28 34 Z" fill="{{ c2 }}"/>
+        {% elif a.icono == 'facturas' %}
+          <path d="M14 6 h28 l10 10 v42 l-5 -3 -5 3 -5 -3 -5 3 -5 -3 -5 3 -5 -3 -3 2 Z" fill="{{ c1 }}"/>
+          <rect x="20" y="22" width="22" height="4" rx="2" fill="#fff"/>
+          <rect x="20" y="31" width="22" height="4" rx="2" fill="#fff"/>
+          <rect x="20" y="40" width="14" height="4" rx="2" fill="{{ c2 }}"/>
         {% elif a.icono == 'clientes' %}
           <circle cx="23" cy="22" r="10" fill="{{ c2 }}"/>
           <path d="M6 52 a17 15 0 0 1 34 0 Z" fill="{{ c2 }}"/>

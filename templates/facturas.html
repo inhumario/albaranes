@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block titulo %}Facturas · Albaranes · Inhumario{% endblock %}
+{% block cuerpo %}
+<h1>Facturas</h1>
+<p class="mini">Sube la factura de transporte y se cruza con los albaranes escaneados: cada viaje con sus
+albaranes, su peso y sus palés. Después se descarga el Excel de la relación de albaranes.</p>
+<form class="subida" method="post" enctype="multipart/form-data">
+  <div class="subida-cab"><strong>Subir factura</strong><span class="mini">el PDF de la factura, todas sus páginas</span></div>
+  <input type="file" name="factura" accept="application/pdf,.pdf" required>
+  <div class="subida-pie"><button class="boton">Leer factura</button></div>
+</form>
+<h2>Facturas subidas</h2>
+<div class="tabla-scroll"><table>
+<tr><th>Factura</th><th>Fecha</th><th>Importe bruto</th><th>Estado</th><th></th></tr>
+{% for f in filas %}
+<tr>
+  <td><strong>{{ f['numero'] or f['fichero'] }}</strong></td>
+  <td>{{ f['fecha'][8:10] ~ '/' ~ f['fecha'][5:7] ~ '/' ~ f['fecha'][:4] if f['fecha'] else '—' }}</td>
+  <td>{{ '{:,.2f} €'.format(f['imp_bruto']).replace(',', 'X').replace('.', ',').replace('X', '.') if f['imp_bruto'] else '—' }}</td>
+  <td>{% if f['estado'] == 'lista' %}<span class="pill {{ 'entregado' if f['cuadra'] else 'revisar' }}">{{ 'leída · cuadra' if f['cuadra'] else 'leída · NO cuadra' }}</span>
+      {% else %}<span class="pill {{ 'error' if f['estado'].startswith('error') else 'procesando' }}">{{ f['estado'] }}</span>{% endif %}</td>
+  <td style="white-space:nowrap"><a class="boton suave" href="{{ url_for('factura_ver', fid=f['id']) }}">Ver</a>
+    {% if f['estado'] == 'lista' %}<a class="boton" href="{{ url_for('factura_excel', fid=f['id']) }}">Excel</a>{% endif %}</td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="mini">Todavía no hay facturas.</td></tr>
+{% endfor %}
+</table></div>
+{% endblock %}

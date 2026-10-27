@@ -136,6 +136,7 @@ main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--cora
 {% if session.get('acceso') %}
 {% set modulos = {'index':'Subir escaneo','revision':'Revisión','albaranes':'Archivo','carpeta_zip':'Archivo',
                   'pendientes':'Por entregar','portal':'Por entregar',
+                  'facturas':'Facturas','factura_ver':'Facturas',
                   'clientes':'Clientes','cliente_form':'Clientes','ajustes':'Ajustes','inicio':'Albaranes'} %}
 <header class="topbar">
   <a class="apps" href="{{ url_for('inicio') }}" title="Inicio">
@@ -153,6 +154,7 @@ main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--cora
       {% if n_por_entregar or request.endpoint in ('pendientes','portal') %}
       <a href="{{ url_for('pendientes') }}" class="{{ 'activo' if request.endpoint in ('pendientes','portal') }}">Por entregar{% if n_por_entregar %} <span class="cuenta-menu">{{ n_por_entregar }}</span>{% endif %}</a>
       {% endif %}
+      <a href="{{ url_for('facturas') }}" class="{{ 'activo' if request.endpoint in ('facturas','factura_ver') }}">Facturas</a>
       <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint in ('clientes','cliente_form') }}">Clientes</a>
       <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint in ('ajustes',) }}">Ajustes</a>
   </nav>
