@@ -27,6 +27,11 @@ Lo ya entregado no se toca: solo se avisa.</p>
   <button class="boton" {{ 'disabled' if repaso.get('estado') == 'leyendo' }}>Volver a revisar todo</button>
   {% if repaso.get('estado') == 'leyendo' %}<span class="mini">releyendo {{ repaso.get('total') }} albaranes…</span>{% endif %}
 </form>
+<form method="post" action="{{ url_for('ajustes_repasar') }}" style="margin-top:.5rem">
+  <input type="hidden" name="solo" value="sin_cliente">
+  <button class="boton suave" {{ 'disabled' if repaso.get('estado') == 'leyendo' }}>Releer solo los albaranes sin cliente</button>
+  <span class="mini">los de otros proveedores que en realidad se recogen para un cliente pasan a ser suyos</span>
+</form>
 {% if repaso.get('estado') == 'hecho' %}
 <div class="aviso" style="margin-top:.8rem">
   <strong>Último repaso ({{ repaso['fin'][8:10] }}/{{ repaso['fin'][5:7] }} {{ repaso['fin'][11:16] }}):</strong>

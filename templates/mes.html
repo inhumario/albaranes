@@ -59,8 +59,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   {% endfor %}
   </ul>
   <div class="acciones">
-    <a class="boton suave" href="{{ url_for('mes_paquete', mes=mes) }}">⬇ Descargar el mes (albaranes nombrados{{ ' + Excel' if fac }})</a>
-    {% if fac %}<a class="boton suave" href="{{ url_for('factura_excel', fid=fac['id']) }}">⬇ Solo el Excel</a>{% endif %}
+    <a class="boton suave" href="{{ url_for('mes_paquete', mes=mes) }}">⬇ Descargar el mes (albaranes nombrados{{ ' + Excel' if facs }})</a>
+    {% if facs %}<a class="boton suave" href="{{ url_for('mes_excel', mes=mes) }}">⬇ Solo el Excel{{ ' (' ~ facs|length ~ ' facturas)' if facs|length > 1 }}</a>{% endif %}
   </div>
   {% if not cierre.get('fecha') %}
   <form method="post" action="{{ url_for('mes_cerrar', mes=mes) }}" style="margin-top:.9rem">
@@ -97,6 +97,19 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
 <tr><td colspan="7" class="mini">No hay órdenes de carga escaneadas de este mes.</td></tr>
 {% endfor %}
 </table></div>
+
+{% if recogidas %}
+<h2>Recogidas para Delaviuda</h2>
+<p class="mini">Albaranes de sus proveedores que se recogen y se le llevan a Sonseca. No llevan orden de carga: van con el viaje de la factura que los cobra.</p>
+<div class="tabla-scroll"><table>
+<tr><th>Albarán</th><th>Proveedor</th><th>Recogida</th><th>Fecha</th><th>Viaje facturado</th></tr>
+{% for r in recogidas %}
+<tr class="{{ 'fila-rojo' if not r.viaje }}"><td><strong>{{ r.numero }}</strong></td><td>{{ r.emisor|upper }}</td><td>{{ r.origen or '—' }} → {{ r.destino or 'SONSECA' }}</td>
+  <td>{{ r.fecha_doc[8:10] }}/{{ r.fecha_doc[5:7] }}</td>
+  <td>{% if r.viaje %}{{ r.viaje }}{% else %}<span class="semaforo rojo">en ninguna factura</span>{% endif %}</td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
 
 {% if sueltos %}
 <h2>Albaranes sin su orden de carga</h2>

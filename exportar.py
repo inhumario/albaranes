@@ -17,10 +17,24 @@ def sin_tildes(t: str) -> str:
     return ''.join(c for c in unicodedata.normalize('NFKD', t or '') if not unicodedata.combining(c))
 
 
+def origen_de(descripcion: str) -> str:
+    """«SANTA PERPETUA DE LA MOGODA -> SONSECA Ref: …» → 'SANTA PERPETUA DE LA MOGODA'."""
+    d = descripcion or ''
+    return sin_tildes(d.split('->', 1)[0]).strip(' .').upper() if '->' in d else ''
+
+
+def es_recogida(v: dict) -> bool:
+    """Viaje de vuelta: se recoge mercancía en otro sitio y se lleva a Sonseca (la fábrica del
+    cliente), p. ej. el 1088 SANTA PERPETUA DE LA MOGODA → SONSECA (Fuji Oil, factura 8268)."""
+    origen = origen_de(v.get('descripcion', ''))
+    return sin_tildes(v.get('destino', '')).upper() == 'SONSECA' and origen not in ('', 'SONSECA')
+
+
 def es_linea_suelta(v: dict) -> bool:
-    """Líneas de factura que no son un viaje con mercancía: combustible, gestión documental…"""
+    """Líneas de factura que no son un viaje con mercancía: combustible, gestión documental…
+    (SONSECA -> SONSECA Ref: INCREMENTO INDEXACION…). Una recogida que viene a Sonseca, no."""
     return v['destino'] in ('SONSECA', '') and not v.get('albaranes') and 'Ref:' in v['descripcion'] \
-        and not re.search(r'Ref:\s*\d{8}', v['descripcion'])
+        and not re.search(r'Ref:\s*\d{8}', v['descripcion']) and not es_recogida(v)
 
 
 def nombre_hoja(numero: str, fecha: str) -> str:
@@ -29,9 +43,19 @@ def nombre_hoja(numero: str, fecha: str) -> str:
     return f'FACTURA Nº {n} ({f})'[:31]
 
 
-def excel(factura: dict, datos_albaran: dict, fijos: dict) -> bytes:
-    """`datos_albaran`: número → {'peso', 'pales'}; `fijos`: cmr, codigo, nombre."""
+def excel(factura, datos_albaran: dict, fijos: dict) -> bytes:
+    """`factura`: una o varias (lista): una hoja por factura, como su fichero del mes, que trae
+    la 8269 y la 8268 de septiembre. `datos_albaran`: número → {'peso', 'pales'};
+    `fijos`: cmr, codigo, nombre."""
     wb = xlwt.Workbook(encoding='utf-8')
+    for f in (factura if isinstance(factura, list) else [factura]):
+        _hoja(wb, f, datos_albaran, fijos)
+    salida = io.BytesIO()
+    wb.save(salida)
+    return salida.getvalue()
+
+
+def _hoja(wb, factura: dict, datos_albaran: dict, fijos: dict) -> None:
     hoja = wb.add_sheet(nombre_hoja(factura.get('numero'), factura.get('fecha')))
     fuente = 'font: name Calibri, height 220;'
     centro = 'align: horiz center, vert center;'
@@ -64,6 +88,13 @@ def excel(factura: dict, datos_albaran: dict, fijos: dict) -> bytes:
         if es_linea_suelta(v):
             concepto = v['descripcion'].split('Ref:', 1)[1].strip()
             escribe([viaje, concepto, None, None, v.get('cantidad') or 1, v['importe']])
+        elif es_recogida(v):
+            # como en su Excel: «ORIGEN-SONSECA», sin número de albarán DLV (el de la recogida
+            # es del proveedor) ni palés
+            escribe([viaje, f"{origen_de(v['descripcion'])}-{destino}", None, None, None,
+                     v['importe'], *fijos_fila])
+            for e in v['extras']:
+                escribe([viaje, e['concepto'], None, None, None, e['importe'], *fijos_fila])
         else:
             albaranes = v.get('albaranes') or []
             if not albaranes:  # viaje sin albaranes identificados: una fila con los palés de la factura
@@ -78,6 +109,3 @@ def excel(factura: dict, datos_albaran: dict, fijos: dict) -> bytes:
     fila += 1
     hoja.write(fila, 0, f"RELACIÓN DE ALBARANES CORRESPONDIENTES A "
                         f"{nombre_hoja(factura.get('numero'), factura.get('fecha'))}", st_neg)
-    salida = io.BytesIO()
-    wb.save(salida)
-    return salida.getvalue()

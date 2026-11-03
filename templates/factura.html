@@ -52,7 +52,7 @@
   <div class="viaje {{ 'mal' if v['estado'] not in ('ok', 'suelta') }}" id="v{{ v['viaje'] }}">
     <div class="viaje-cab">
       <span class="num">Viaje {{ v['viaje'] }}</span>
-      <span>{{ v['fecha'][8:10] ~ '/' ~ v['fecha'][5:7] if v['fecha'] else '' }} · {{ v['destino'] if v['estado'] != 'suelta' else v['descripcion'] }}</span>
+      <span>{{ v['fecha'][8:10] ~ '/' ~ v['fecha'][5:7] if v['fecha'] else '' }} · {{ ('🚚 recogida ' ~ v['origen'] ~ ' → ' if v.get('recogida')) }}{{ v['destino'] if v['estado'] != 'suelta' else v['descripcion'] }}</span>
       {% if v['estado'] != 'suelta' %}
       <span class="mini">palés: factura {{ '%g'|format(v['cantidad'] or 0) }} · albaranes {{ '%g'|format(v['pales_albaranes'] or 0) }}
         {% if v['estado'] == 'ok' %}✓{% else %}· <strong>{{ v['estado'] }}</strong>{% endif %}</span>

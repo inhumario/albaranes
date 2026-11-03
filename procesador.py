@@ -33,10 +33,12 @@ Extrae en JSON estricto, sin nada más:
   "emisor": "marca principal del membrete, en minúsculas, UNA palabra si es posible (p.ej. 'delaviuda', no 'delaviuda alimentación s.a.u.')",
   "numero": "el número identificador del albarán tal cual aparece (junto a etiquetas como DELIVERY NOTE, ALBARÁN Nº, Nº DOCUMENTO...). Solo el número, sin espacios",
   "hoja": "valor del campo SHEET/HOJA si existe, si no null",
-  "fecha": "SOLO la fecha de CARGA en formato AAAA-MM-DD: en un albarán, la de LOADING / Expedición / Fecha de carga / Fecha de salida; en una orden de carga, su campo FECHA. NUNCA la de entrega (DELIVERY, Entrega) ni la del pedido (Nº PEDIDO/FECHA) ni sellos de recepción. Si la casilla de carga o expedición está vacía, null. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
+  "fecha": "SOLO la fecha de CARGA en formato AAAA-MM-DD: en un albarán, la de LOADING / Expedición / Fecha de carga / Fecha de salida / Fecha de recogida; en una orden de carga, su campo FECHA. NUNCA la de entrega (DELIVERY, Entrega) ni la del pedido (Nº PEDIDO/FECHA) ni sellos de recepción. Si la casilla de carga o expedición está vacía, null. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
   "peso_bruto": "solo en albaranes: PESO BRUTO total del albarán en kg, como número con punto decimal (1.138,200 → 1138.2); null si no aparece",
   "pales": "solo en albaranes: número total de palés (PALLETS / PALES / Nº PALETS) como número; null si no aparece",
   "destino": "solo en albaranes: población del domicilio de envío de la mercancía, en mayúsculas y sin código postal (p.ej. BARCELONA); null si no aparece",
+  "entrega_a": "solo en albaranes: empresa a la que se ENTREGA la mercancía (Datos de entrega / Destinatario / Consignee / Ship to / Cliente), marca principal en minúsculas y UNA palabra (p.ej. 'delaviuda'); null si no aparece",
+  "origen": "solo en albaranes: población donde se RECOGE la mercancía si el documento trae un Lugar de recogida / Lugar de carga distinto del membrete, en mayúsculas y sin código postal (p.ej. SANTA PERPETUA DE LA MOGODA); null si no aparece",
   "sellado": "true si la hoja lleva sello o firma de recepción del cliente (p.ej. 'CONFORME', fecha de llegada estampada), si no false",
   "es_continuacion": "true solo si la página claramente NO es la primera hoja de un albarán (no tiene cabecera con número propio)",
   "confianza": "alta|media|baja según lo legible que sea el número"
@@ -447,7 +449,11 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
             datos = {'sellado': str(info.get('sellado')).lower() == 'true',
                      'peso': _num(info.get('peso_bruto')), 'pales': _num(info.get('pales')),
                      'destino': (info.get('destino') or '').strip().upper() or None,
-                     'fecha': info.get('fecha')}
+                     'fecha': info.get('fecha'),
+                     # albarán de un proveedor del cliente que se recoge para él (Fuji Oil →
+                     # Delaviuda en Sonseca): a quién se entrega y dónde se recoge
+                     'entrega_a': (info.get('entrega_a') or '').strip() or None,
+                     'origen': (info.get('origen') or '').strip().upper() or None}
             otra_version = actual and numero and numero == actual['numero'] and _difiere(datos, actual)
             if actual and numero and numero == actual['numero'] and hoja in actual['hojas'] \
                     and not otra_version:
