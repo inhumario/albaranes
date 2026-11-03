@@ -102,6 +102,43 @@ def numeros_citados(texto) -> list[str]:
             numeros.append(t)
     return numeros
 
+def _falta_una_cifra(corto: str, largo: str) -> bool:
+    """«8048014» es «80468014» con una cifra de menos (escrito a mano)."""
+    return len(largo) == len(corto) + 1 and any(largo[:i] + largo[i + 1:] == corto
+                                                for i in range(len(largo)))
+
+
+def albaranes_citados(texto, largo: int = 8, prefijo: str = '', conocidos=()) -> list[str]:
+    """TODOS los albaranes que cita una orden de carga, uno a uno. El guion es un rango y la
+    barra o la coma separan: «80466258-6261, 6269, 6719-21» → 80466258…80466261, 80466269,
+    80466719…80466721. Lo abreviado repite el principio del número anterior; si la orden solo
+    trae finales («6633/6634»), el principio sale de `prefijo` (un albarán de la misma pila)."""
+    if not texto:
+        return []
+    piezas = re.findall(r'\d+|-', str(texto).replace(' ', ''))
+    base = ''
+    salida, rango_desde = [], None
+    for x in piezas:
+        if x == '-':
+            rango_desde = salida[-1] if salida else None
+            continue
+        parecido = next((c for c in conocidos if len(x) == largo - 1 and _falta_una_cifra(x, c)), None)
+        if parecido:  # número completo con una cifra de menos: es el de la pila
+            x = parecido
+        elif base and len(x) < len(base):
+            x = base[:len(base) - len(x)] + x
+        elif len(x) < largo and prefijo and len(prefijo) >= largo:
+            x = prefijo[:largo - len(x)] + x
+        base = x if len(x) >= len(base) else base
+        if rango_desde and rango_desde.isdigit() and int(rango_desde) < int(x) \
+                and int(x) - int(rango_desde) <= 200:
+            salida += [str(n) for n in range(int(rango_desde) + 1, int(x) + 1)]
+        elif x not in salida:
+            salida.append(x)
+        rango_desde = None
+    return list(dict.fromkeys(salida))
+
+
 _cliente_api = None
 
 
@@ -272,9 +309,13 @@ def completar_refs(grupos: list[dict]) -> None:
         cortos = [n for n in g['rango'] if len(n) < largo]
         if not cortos:
             continue
-        base = next((n for n in numeros if len(n) == largo and n.endswith(cortos[0])), numeros[0])
+        base = next((n for n in numeros if len(n) == largo and (n.endswith(cortos[0])
+                                                                or _falta_una_cifra(cortos[0], n))), numeros[0])
         g['rango'] = [base[:largo - len(n)] + n if len(n) < largo else n for n in g['rango']]
         g['refs'] = g['rango'][:1]
+        g['citados'] = albaranes_citados(g['ref_texto'], largo, base, numeros)
+        if g['citados']:  # el primero de la orden manda (la orden va con él)
+            g['rango'], g['refs'] = g['citados'], g['citados'][:1]
 
 
 def _resumen(d) -> str:
@@ -363,6 +404,7 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                                      'emisor': info.get('emisor') or '', 'fecha': info.get('fecha'),
                                      'ref_texto': str(ref),
                                      'rango': numeros_citados(ref),
+                                     'citados': albaranes_citados(ref),
                                      # rango → la orden va con el PRIMER albarán (regla de Mario)
                                      'refs': numeros_citados(ref)[:1],
                                      'confianza': info.get('confianza', 'media'), 'paginas': [i]}))

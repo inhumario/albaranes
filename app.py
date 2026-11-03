@@ -32,7 +32,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -139,6 +139,7 @@ def init_db() -> None:
         # v0.9.1: fecha y rango de la orden de carga (da la fecha de carga a los albaranes que
         # no la traen) y sello de recepción (entre copias repetidas se guarda la sellada)
         for tabla, col in (('anexos', "fecha TEXT"), ('anexos', "rango_ini TEXT"),
+                           ('anexos', "citados TEXT"),
                            ('anexos', "rango_fin TEXT"),
                            ('albaranes', "sellado INTEGER NOT NULL DEFAULT 0")):
             try:
@@ -162,6 +163,14 @@ def init_db() -> None:
                 con.execute(f'ALTER TABLE clientes ADD COLUMN {col}')
             except sqlite3.OperationalError:
                 pass
+        # v1.1.1: lista exacta de albaranes de cada orden (el intervalo del primero al último
+        # se tragaba los de otros viajes cuando la orden cita sueltos: 6258-6261, 6269, 6762)
+        for o in con.execute('SELECT id, lote_id, ref_texto, rango_ini FROM anexos WHERE citados IS NULL').fetchall():
+            pila = [r[0] for r in con.execute('SELECT numero FROM albaranes WHERE lote_id=? AND numero IS NOT NULL '
+                                              'ORDER BY numero', (o['lote_id'],))]
+            parecido = next((n for n in pila if (o['rango_ini'] or '')[-4:] and n.endswith((o['rango_ini'] or '')[-4:])), '')
+            citados = procesador.albaranes_citados(o['ref_texto'], 8, parecido or o['rango_ini'] or '', pila)
+            con.execute('UPDATE anexos SET citados=? WHERE id=?', (json.dumps(citados), o['id']))
         if not cfg_get(con, 'revisar_antes'):
             cfg_set(con, 'revisar_antes', '1')
         # contraseña inicial: de la variable ACCESO_CLAVE la primera vez
@@ -506,11 +515,13 @@ def alta_anexo(con, lote_id, g, destino: Path, ahora: datetime) -> None:
     rango = g.get('rango') or []
     fecha = fecha_valida(g.get('fecha'))
     con.execute('INSERT INTO anexos (lote_id, tipo, ref_texto, refs, ruta, paginas, creado, fecha, '
-                'rango_ini, rango_fin) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                'rango_ini, rango_fin, citados) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                 (lote_id, g['tipo'], g['ref_texto'], json.dumps(g['refs']), str(destino.relative_to(DATA)),
                  len(g['paginas']), ahora.isoformat(timespec='seconds'),
                  f'{fecha:%Y-%m-%d}' if fecha else None,
-                 rango[0] if rango else None, rango[-1] if rango else None))
+                 rango[0] if rango else None, rango[-1] if rango else None,
+                json.dumps(g.get('citados') or procesador.albaranes_citados(
+                    g['ref_texto'], 8, rango[0] if rango else ''))))
 
 
 def recolocar(con, a, fecha: datetime) -> str:
@@ -529,16 +540,15 @@ def recolocar(con, a, fecha: datetime) -> str:
 
 
 def fechas_desde_ordenes(con: sqlite3.Connection) -> list[str]:
-    """Albaranes sin fecha de carga: toman la FECHA de la orden de carga cuyo rango los
-    incluye (la orden es la que lleva la fecha de carga; el albarán a veces no)."""
+    """Albaranes sin fecha de carga: toman la FECHA de la orden de carga que los cita
+    (uno a uno, no del primero al último) (la orden es la que lleva la fecha de carga; el albarán a veces no)."""
     cambios = []
-    ordenes = con.execute('SELECT * FROM anexos WHERE fecha IS NOT NULL AND rango_ini IS NOT NULL').fetchall()
+    ordenes = [(o, set(json.loads(o['citados'] or '[]'))) for o in con.execute(
+        'SELECT * FROM anexos WHERE fecha IS NOT NULL AND rango_ini IS NOT NULL').fetchall()]
     for a in con.execute("SELECT * FROM albaranes WHERE fecha_doc IS NULL AND numero IS NOT NULL "
                          "AND estado NOT IN ('entregado', 'descartado')").fetchall():
-        for o in ordenes:
-            ini, fin = o['rango_ini'], o['rango_fin'] or o['rango_ini']
-            if a['numero'].isdigit() and len(a['numero']) == len(ini) == len(fin) \
-                    and int(ini) <= int(a['numero']) <= int(fin):
+        for o, citados in ordenes:
+            if a['numero'] in citados:
                 fecha = fecha_valida(o['fecha'])
                 if fecha:
                     antes = Path(a['ruta']).parent
@@ -1302,32 +1312,39 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
         "SELECT numero, fecha_doc, destino, pales, peso_kg FROM albaranes "
         "WHERE estado != 'descartado' AND numero IS NOT NULL")]
     por_numero = {a['numero']: a for a in albs}
-    ordenes = con.execute('SELECT rango_ini, rango_fin FROM anexos WHERE rango_ini IS NOT NULL').fetchall()
-    usados = set()
+    ordenes = [set(json.loads(o['citados'] or '[]')) for o in con.execute(
+        'SELECT citados FROM anexos WHERE citados IS NOT NULL').fetchall()]
+    escaneados = {a['numero'] for a in albs}
+    viajes = [v for v in datos['viajes'] if not exportar.es_linea_suelta({**v, 'albaranes': []})]
     for v in datos['viajes']:
-        if exportar.es_linea_suelta({**v, 'albaranes': []}):
+        if v not in viajes:
             v['albaranes'], v['estado'] = [], 'suelta'
-            continue
-        lista = [n for n in v['refs'] if n not in v.get('quitados', [])]
-        for o in ordenes:  # misma orden de carga que alguno de los citados
-            ini, fin = o['rango_ini'], o['rango_fin'] or o['rango_ini']
-            if any(n.isdigit() and len(n) == len(ini) and int(ini) <= int(n) <= int(fin) for n in v['refs']):
-                lista += [a['numero'] for a in albs if a['numero'].isdigit() and len(a['numero']) == len(ini)
-                          and int(ini) <= int(a['numero']) <= int(fin)]
+    usados = set()
+
+    def tomar(v, lista):
+        for n in lista:
+            if n not in v['albaranes'] and n not in v.get('quitados', []) and (
+                    n not in usados or n in v['refs'] or n in v.get('anadidos', [])):
+                v['albaranes'].append(n)
+                usados.add(n)
+    # 1.ª pasada, lo seguro: lo que cita la factura, lo añadido a mano y los demás albaranes
+    # que cita la misma orden de carga (uno a uno, nunca del primero al último)
+    for v in viajes:
+        v['albaranes'] = []
+        tomar(v, v['refs'] + v.get('anadidos', []))
+        for citados in ordenes:
+            if citados & set(v['refs']):
+                tomar(v, sorted(n for n in citados if n in escaneados))
+    # 2.ª pasada: lo que nadie ha cogido, por fecha de carga (o la víspera) y destino
+    for v in viajes:
         f = fecha_valida(v.get('fecha'))
         destino = procesador.normaliza(exportar.sin_tildes(v['destino']))
-        if f and destino:
+        if f and destino and not v['albaranes'][len(v['refs']):]:
             dias = {f'{f:%Y-%m-%d}', f'{f - timedelta(days=1):%Y-%m-%d}'}
-            lista += [a['numero'] for a in albs if a['fecha_doc'] in dias and a['destino']
-                      and destino in procesador.normaliza(exportar.sin_tildes(a['destino']))]
-        lista += v.get('anadidos', [])
-        vistos = []
-        for n in lista:
-            if n not in vistos and n not in v.get('quitados', []) and (n not in usados or n in v['refs']
-                                                                       or n in v.get('anadidos', [])):
-                vistos.append(n)
-        usados.update(vistos)
-        v['albaranes'] = vistos
+            tomar(v, [a['numero'] for a in albs if a['numero'] not in usados and a['fecha_doc'] in dias
+                      and a['destino'] and destino in procesador.normaliza(exportar.sin_tildes(a['destino']))])
+    for v in viajes:
+        vistos = v['albaranes']
         v['faltan'] = [n for n in vistos if n not in por_numero]
         pales = sum((por_numero.get(n) or {}).get('pales') or 0 for n in vistos)
         v['pales_albaranes'] = pales
