@@ -41,6 +41,10 @@
     <tr><th>Albarán</th><th>Carga</th><th>Destino</th><th>Palés</th></tr>
     {% for a in datos['sin_facturar'] %}<tr><td><code>{{ a['numero'] }}</code></td><td>{{ a['fecha'][8:10] }}/{{ a['fecha'][5:7] }}</td><td>{{ a['destino'] or '—' }}</td><td>{{ '%g'|format(a['pales']) if a['pales'] is not none else '—' }}</td></tr>{% endfor %}
     </table></div></div>{% endif %}
+  {% set sin_pales = reales|map(attribute='sin_pales')|select|map('length')|sum %}
+  {% if sin_pales %}<div class="aviso">⚠ <strong>{{ sin_pales }} albarán(es) sin palés leídos</strong>: sus viajes salen como «palés sin leer».
+    <form method="post" style="display:inline"><input type="hidden" name="accion" value="releer_pales">
+    <button class="boton suave">Volver a leer los palés</button></form> <span class="mini">(unos segundos por albarán)</span></div>{% endif %}
   {% if datos.get('no_escaneados') %}<div class="aviso">⚠ <strong>{{ datos['no_escaneados']|length }} albarán(es) de la factura sin escanear:</strong> {{ datos['no_escaneados']|join(', ') }}. Escanéalos y pulsa «Volver a cruzar».</div>{% endif %}
   {% if con_problema %}<div class="aviso">⚠ {{ con_problema|length }} viaje(s) no cuadran o les faltan albaranes escaneados: salen en rojo. Se pueden añadir o quitar albaranes a mano; el Excel sale igualmente con lo que haya.</div>{% endif %}
 

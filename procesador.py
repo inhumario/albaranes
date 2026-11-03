@@ -250,6 +250,30 @@ def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
     return info
 
 
+PROMPT_PALES = ('Esto es un albarán de transporte escaneado. Di el NÚMERO TOTAL DE PALÉS de la mercancía: '
+                'casilla PALLETS / PALES / Nº PALETS / BULTOS-PALÉS del pie, o la suma de las líneas de palés si '
+                'no hay total. Responde solo con el número (p. ej. 12). Si esta hoja NO es un albarán (una ORDEN '
+                'DE CARGA, un vale de palés, una confirmación de otra empresa) o no aparece, responde NO.')
+
+
+def leer_pales(pdf: Path) -> float | None:
+    """Segunda oportunidad para los palés cuando la lectura general no los encontró: solo
+    esa casilla, a 300 ppp y con el modelo grande. Va hoja a hoja desde el principio: detrás del
+    albarán puede ir su orden de carga, que trae los palés de TODO el viaje y no valen."""
+    n = len(PdfReader(str(pdf)).pages)
+    for pagina in range(min(n, 3)):
+        with tempfile.TemporaryDirectory() as tmp:
+            pref = Path(tmp) / 'q'
+            subprocess.run(['pdftoppm', '-r', str(DPI_AMPLIADA), '-png', '-gray', '-singlefile',
+                            '-f', str(pagina + 1), '-l', str(pagina + 1), str(pdf), str(pref)], check=True)
+            datos = base64.standard_b64encode(pref.with_suffix('.png').read_bytes()).decode()
+        texto = _pedir(datos, PROMPT_PALES, 50, MODELO_AMPLIADA).strip()
+        valor = _num(re.sub(r'[^0-9.,]', '', texto)) if re.search(r'\d', texto) else None
+        if valor and 0 < valor < 100:
+            return valor
+    return None
+
+
 def _lectura_ampliada(png: Path, pdf: Path, pagina: int) -> str:
     """Página entera a 300 dpi en gris, leída dígito a dígito por Sonnet. (Recortar la casilla
     con una caja pedida a Haiku se probó el 27-10 y falla: la caja sale desplazada.)"""

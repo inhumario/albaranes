@@ -33,7 +33,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.3.0'
+VERSION = '1.3.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -349,6 +349,16 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
             con.execute('UPDATE lotes SET hechas=?, paginas=? WHERE id=?', (hechas, total, lote_id))
     try:
         grupos = procesador.procesar_pdf(pdf, avance)
+        import tempfile
+        for g in grupos:  # palés sin leer: una lectura solo de esa casilla
+            if g.get('tipo') == 'albaran' and g.get('numero') and g.get('pales') is None:
+                with tempfile.NamedTemporaryFile(suffix='.pdf') as f:
+                    g['writer'].write(f)
+                    f.flush()
+                    try:
+                        g['pales'] = procesador.leer_pales(Path(f.name))
+                    except Exception:
+                        pass
         ahora = datetime.now()
         # la lectura va en paralelo; el archivado, de uno en uno: dos escaneos con copias del
         # mismo albarán no pueden darlo de alta los dos a la vez
@@ -1599,8 +1609,11 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
         pales = sum((por_numero.get(n) or {}).get('pales') or 0 for n in vistos)
         v['pales_albaranes'] = pales
         cantidad = v.get('cantidad') or 0
+        sin_pales = [n for n in vistos if n in por_numero and por_numero[n].get('pales') is None]
+        v['sin_pales'] = sin_pales
         v['estado'] = ('sin albaranes' if not vistos else 'faltan escaneos' if v['faltan']
-                       else 'ok' if cantidad <= 1 or abs(pales - cantidad) < 0.01 else 'palés no cuadran')
+                       else 'ok' if cantidad <= 1 or abs(pales - cantidad) < 0.01
+                       else 'palés sin leer' if sin_pales else 'palés no cuadran')
     # para cerrar el círculo: lo escaneado del mes que no está en ningún viaje de la factura
     # (¿un viaje sin facturar?) y lo facturado que no se ha escaneado
     mes = (datos.get('fecha') or '')[:7]
@@ -1672,6 +1685,18 @@ def factura_ver(fid):
                 elif accion == 'quitar' and numero:
                     v.setdefault('quitados', []).append(numero)
                     v['anadidos'] = [n for n in v.get('anadidos', []) if n != numero]
+            if accion == 'releer_pales':
+                numeros = {n for v in datos['viajes'] for n in v.get('sin_pales', [])}
+                filas = con.execute(f"SELECT id, ruta FROM albaranes WHERE pales IS NULL AND estado != 'descartado' "
+                                    f"AND numero IN ({','.join('?' * len(numeros))})", list(numeros)).fetchall() if numeros else []
+                leidos = 0
+                for r in filas:
+                    valor = procesador.leer_pales(DATA / r['ruta'])
+                    if valor:
+                        con.execute('UPDATE albaranes SET pales=? WHERE id=?', (valor, r['id']))
+                        leidos += 1
+                flash(f'Palés leídos en {leidos} de {len(filas)} albaranes.')
+                accion = 'recruzar'
             if accion in ('anadir', 'quitar', 'recruzar'):
                 datos = cruzar_factura(datos, con)
                 con.execute('UPDATE facturas SET datos=? WHERE id=?', (json.dumps(datos), fid))
