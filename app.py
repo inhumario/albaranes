@@ -32,7 +32,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.1.1'
+VERSION = '1.1.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -1312,8 +1312,8 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
         "SELECT numero, fecha_doc, destino, pales, peso_kg FROM albaranes "
         "WHERE estado != 'descartado' AND numero IS NOT NULL")]
     por_numero = {a['numero']: a for a in albs}
-    ordenes = [set(json.loads(o['citados'] or '[]')) for o in con.execute(
-        'SELECT citados FROM anexos WHERE citados IS NOT NULL').fetchall()]
+    filas_ordenes = con.execute('SELECT citados, fecha FROM anexos WHERE citados IS NOT NULL').fetchall()
+    ordenes = [set(json.loads(o['citados'] or '[]')) for o in filas_ordenes]
     escaneados = {a['numero'] for a in albs}
     viajes = [v for v in datos['viajes'] if not exportar.es_linea_suelta({**v, 'albaranes': []})]
     for v in datos['viajes']:
@@ -1343,6 +1343,19 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
             dias = {f'{f:%Y-%m-%d}', f'{f - timedelta(days=1):%Y-%m-%d}'}
             tomar(v, [a['numero'] for a in albs if a['numero'] not in usados and a['fecha_doc'] in dias
                       and a['destino'] and destino in procesador.normaliza(exportar.sin_tildes(a['destino']))])
+    # 3.ª pasada: viaje que sigue vacío (la factura no cita albaranes y van a otra dirección,
+    # p. ej. Sant Gregori → plataformas de Lidl Francia): si hay UNA sola orden de carga de su
+    # fecha (o la víspera) con albaranes escaneados que nadie ha cogido, es la suya
+    for v in viajes:
+        f = fecha_valida(v.get('fecha'))
+        if v['albaranes'] or not f:
+            continue
+        dias = {f'{f:%Y-%m-%d}', f'{f - timedelta(days=1):%Y-%m-%d}'}
+        libres = [sorted(n for n in json.loads(o['citados'] or '[]') if n in escaneados)
+                  for o in filas_ordenes if o['fecha'] in dias]
+        libres = [l for l in libres if l and not usados & set(l)]
+        if len(libres) == 1:
+            tomar(v, libres[0])
     for v in viajes:
         vistos = v['albaranes']
         v['faltan'] = [n for n in vistos if n not in por_numero]
