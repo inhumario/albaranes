@@ -33,7 +33,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.4.0'
+VERSION = '1.4.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -856,6 +856,12 @@ def comprobar_cierre(con: sqlite3.Connection, mes: str, lista: list[dict]) -> li
     c.append({'nivel': 'aviso' if sin_firma else 'ok',
               'texto': f'{sin_firma} albarán(es) sin firma ni sello de recepción' if sin_firma
               else 'Todos los albaranes vienen firmados', 'detalle': ''})
+    # recogidas que no están en ninguna factura (p. ej. falta subir la 8268, que va aparte)
+    sueltas = [r for r in recogidas_del_mes(con, mes) if not r['viaje']]
+    if sueltas:
+        c.append({'nivel': 'aviso', 'texto': f'{len(sueltas)} recogida(s) sin su viaje en ninguna factura',
+                  'detalle': ', '.join(f"{r['numero']} ({r['emisor']}, {r['origen'] or 'origen sin leer'})" for r in sueltas)
+                  + ' · si su factura va aparte, súbela también', 'enlace': url_for('facturas')})
     facs = facturas_del_mes(con, mes)
     if not facs:
         c.append({'nivel': 'falta', 'texto': 'Falta subir la factura del mes', 'detalle': '',
@@ -884,12 +890,6 @@ def comprobar_cierre(con: sqlite3.Connection, mes: str, lista: list[dict]) -> li
               'texto': f'{len(sf)} albarán(es) escaneado(s) que no están en ningún viaje facturado' if sf
               else 'Todo lo escaneado está facturado',
               'detalle': ', '.join(sf), 'enlace': url_for('factura_ver', fid=facs[0]['id'])})
-    # recogidas de este mes que no están en ninguna factura (p. ej. falta subir la 8268)
-    sueltas = [r for r in recogidas_del_mes(con, mes) if not r['viaje']]
-    if sueltas:
-        c.append({'nivel': 'aviso', 'texto': f'{len(sueltas)} recogida(s) sin su viaje en una factura',
-                  'detalle': ', '.join(f"{r['numero']} ({r['emisor']}, {r['origen'] or 'origen sin leer'})" for r in sueltas)
-                  + ' · si la factura es aparte, súbela también', 'enlace': url_for('facturas')})
     return c
 
 
