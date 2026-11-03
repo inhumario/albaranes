@@ -32,7 +32,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.0.1'
+VERSION = '1.1.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -324,10 +324,13 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
             for n, g in enumerate(grupos):
                 if g.get('duplicadas'):
                     descartados.append(f"{g['numero']} (copia en el mismo escaneo)")
-                if g.get('tipo') == 'orden_carga':
+                if g.get('versiones'):
+                    descartados.append(f"{g['numero']} (trae otra versión con {', '.join(g['versiones'])}: "
+                                       f"mandan los datos de la última, {procesador._resumen(g)})")
+                if g.get('tipo') in ('orden_carga', 'albaran_agrupado'):
                     if g['ref_texto'] and con.execute('SELECT 1 FROM anexos WHERE ref_texto=?',
                                                       (g['ref_texto'],)).fetchone():
-                        descartados.append(f"orden de carga {g['ref_texto']} (ya estaba)")
+                        descartados.append(f"{ETIQUETA_ANEXO[g['tipo']]} {g['ref_texto']} (ya estaba)")
                         continue
                     carpeta = ARCHIVO / '_ordenes-de-carga'
                     carpeta.mkdir(parents=True, exist_ok=True)
@@ -351,6 +354,9 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                         descartados.append(f"{g['numero']} (ya estaba: se guarda esta copia, que viene sellada)")
                     else:
                         descartados.append(f"{g['numero']} (ya estaba)")
+                    if g.get('writer_justif') and previo['estado'] != 'entregado':
+                        # la copia repetida trae justificantes (palés, confirmación…): se pegan
+                        pegar_paginas(previo, g['writer_justif'], 'justificantes', con)
                     continue
                 fecha_doc = fecha_valida(g.get('fecha'))
                 cuando = fecha_doc or ahora  # año/mes de la carpeta: los del albarán
@@ -381,6 +387,12 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                      estado, ahora.isoformat(timespec='seconds'),
                      f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None, int(bool(g.get('sellado'))),
                      g.get('peso'), g.get('pales'), g.get('destino')))
+                adjuntos = ', '.join(x for x in (
+                    'justificantes' if g.get('justificantes') else '',
+                    'enderezado' if g.get('girada') else '',
+                    'otra versión' if g.get('versiones') else '') if x)
+                if adjuntos:
+                    con.execute('UPDATE albaranes SET adjuntos=? WHERE id=?', (adjuntos, cur.lastrowid))
                 if estado == 'pendiente_entrega' and cliente['auto_entrega']:
                     resultado = entregar(cur.lastrowid, con)
                     if resultado != 'ok':
@@ -389,6 +401,7 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
             # las órdenes de carga se pegan a su albarán, venga en este escaneo o en otro, y
             # dan su fecha de carga a los albaranes de su rango que no la traen
             unir_anexos(con)
+            unir_anexos_del_viaje(con, lote_id)
             fechas_desde_ordenes(con)
             con.execute('UPDATE lotes SET estado=?, descartados=? WHERE id=?',
                         ('procesado', ', '.join(descartados), lote_id))
@@ -448,6 +461,27 @@ def smtp_config(con: sqlite3.Connection) -> dict | None:
     return cfg if cfg['host'] and cfg['usuario'] else None
 
 
+ETIQUETA_ANEXO = {'orden_carga': 'orden de carga', 'albaran_agrupado': 'albarán agrupado'}
+
+
+def pegar_paginas(albaran, writer, etiqueta: str, con: sqlite3.Connection) -> None:
+    """Añade hojas sueltas (justificantes) al final del PDF de un albarán ya archivado."""
+    from pypdf import PdfReader, PdfWriter
+    w = PdfWriter()
+    for pagina in PdfReader(str(DATA / albaran['ruta'])).pages:
+        w.add_page(pagina)
+    for pagina in writer.pages:
+        w.add_page(pagina)
+    tmp = (DATA / albaran['ruta']).with_suffix('.tmp')
+    with tmp.open('wb') as f:
+        w.write(f)
+    tmp.replace(DATA / albaran['ruta'])
+    actual = con.execute('SELECT adjuntos FROM albaranes WHERE id=?', (albaran['id'],)).fetchone()[0]
+    adjuntos = ', '.join(dict.fromkeys(x for x in ((actual or '').split(', ') + [etiqueta]) if x))
+    con.execute('UPDATE albaranes SET paginas=paginas+?, adjuntos=? WHERE id=?',
+                (len(writer.pages), adjuntos, albaran['id']))
+
+
 def pegar_anexo(anexo, albaran, con: sqlite3.Connection) -> None:
     """Añade las hojas de un anexo al final del PDF del albarán (lo que recibe el cliente)."""
     from pypdf import PdfReader, PdfWriter
@@ -459,7 +493,10 @@ def pegar_anexo(anexo, albaran, con: sqlite3.Connection) -> None:
     with tmp.open('wb') as f:
         w.write(f)
     tmp.replace(DATA / albaran['ruta'])
-    adjuntos = ', '.join(x for x in (albaran['adjuntos'], 'orden de carga') if x)
+    etiqueta = ETIQUETA_ANEXO.get(anexo['tipo'], 'orden de carga')
+    if anexo['paginas'] > 1:  # la orden viene con los justificantes de su viaje detrás
+        etiqueta += ' y justificantes'
+    adjuntos = ', '.join(dict.fromkeys(x for x in ((albaran['adjuntos'] or '').split(', ') + [etiqueta]) if x))
     con.execute('UPDATE albaranes SET paginas=paginas+?, adjuntos=? WHERE id=?',
                 (anexo['paginas'], adjuntos, albaran['id']))
     con.execute('UPDATE anexos SET unido_a=? WHERE id=?', (albaran['id'], anexo['id']))
@@ -468,9 +505,9 @@ def pegar_anexo(anexo, albaran, con: sqlite3.Connection) -> None:
 def alta_anexo(con, lote_id, g, destino: Path, ahora: datetime) -> None:
     rango = g.get('rango') or []
     fecha = fecha_valida(g.get('fecha'))
-    con.execute('INSERT INTO anexos (lote_id, ref_texto, refs, ruta, paginas, creado, fecha, '
-                'rango_ini, rango_fin) VALUES (?,?,?,?,?,?,?,?,?)',
-                (lote_id, g['ref_texto'], json.dumps(g['refs']), str(destino.relative_to(DATA)),
+    con.execute('INSERT INTO anexos (lote_id, tipo, ref_texto, refs, ruta, paginas, creado, fecha, '
+                'rango_ini, rango_fin) VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (lote_id, g['tipo'], g['ref_texto'], json.dumps(g['refs']), str(destino.relative_to(DATA)),
                  len(g['paginas']), ahora.isoformat(timespec='seconds'),
                  f'{fecha:%Y-%m-%d}' if fecha else None,
                  rango[0] if rango else None, rango[-1] if rango else None))
@@ -560,6 +597,26 @@ def unir_anexos(con: sqlite3.Connection) -> None:
             "AND estado NOT IN ('entregado', 'descartado') ORDER BY numero", refs).fetchall()
         for alb in destinos:
             pegar_anexo(anexo, alb, con)
+
+
+def unir_anexos_del_viaje(con: sqlite3.Connection, lote_id: int) -> None:
+    """Un escaneo es un viaje: la orden de carga (o el albarán agrupado) cuyo número no casa
+    con ningún albarán —mal escrito a mano, mal leído— va con el primer albarán de su mismo
+    escaneo, y les da su fecha de carga a los de ese escaneo que no la traen."""
+    albs = con.execute("SELECT * FROM albaranes WHERE lote_id=? AND numero IS NOT NULL "
+                       "AND estado NOT IN ('entregado', 'descartado', 'revisar') ORDER BY numero",
+                       (lote_id,)).fetchall()
+    if not albs:
+        return
+    for anexo in con.execute('SELECT * FROM anexos WHERE lote_id=? AND unido_a IS NULL',
+                             (lote_id,)).fetchall():
+        pegar_anexo(anexo, albs[0], con)
+        fecha = fecha_valida(anexo['fecha'])
+        if fecha:
+            for a in albs:
+                fila = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
+                if not fila['fecha_doc']:
+                    recolocar(con, fila, fecha)
 
 
 def aprobar(albaran_id: int, con: sqlite3.Connection) -> str:
@@ -1149,7 +1206,7 @@ def repasar_todo() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(['pdftoppm', '-r', str(procesador.DPI), '-png', '-singlefile', '-f', '1',
                             '-l', '1', str(pdf), f'{tmp}/p'], check=True)
-            return procesador._analizar_pagina(Path(f'{tmp}/p.png'), pdf, 0)
+            return procesador._leer_derecha(Path(f'{tmp}/p.png'), pdf, 0, Path(tmp))[0]
     try:
         with ThreadPoolExecutor(max_workers=procesador.LECTURAS_A_LA_VEZ) as ex:
             lecturas = list(ex.map(leer, filas))
@@ -1164,7 +1221,7 @@ def repasar_todo() -> None:
                     destino = destino_libre(carpeta, f"orden-{procesador.normaliza(info.get('albaranes_ref') or nombre)}.pdf")
                     (DATA / a['ruta']).rename(destino)
                     rango = procesador.numeros_citados(info.get('albaranes_ref'))
-                    alta_anexo(con, a['lote_id'], {'ref_texto': info.get('albaranes_ref') or '',
+                    alta_anexo(con, a['lote_id'], {'tipo': 'orden_carga', 'ref_texto': info.get('albaranes_ref') or '',
                                                    'refs': rango[:1], 'rango': rango,
                                                    'fecha': info.get('fecha'),
                                                    'paginas': [0] * a['paginas']}, destino, ahora)
