@@ -15,6 +15,7 @@ hasta pulsar «Enviar».
 import hashlib
 import subprocess
 import json
+import re
 import os
 import secrets
 import smtplib
@@ -32,7 +33,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.1.2'
+VERSION = '1.2.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -46,6 +47,9 @@ app.config['MAX_CONTENT_LENGTH'] = 200 * 1024 * 1024
 
 MODOS_ENTREGA = ['ninguna', 'email', 'sftp', 'portal']
 CLAVES_SMTP = ['smtp_host', 'smtp_puerto', 'smtp_usuario', 'smtp_clave', 'smtp_de']
+# Buzón de entrada: la Konica escanea a un correo y la app recoge los PDF sola (v1.2)
+CLAVES_IMAP = ['imap_host', 'imap_usuario', 'imap_clave', 'imap_carpeta', 'imap_remitentes']
+BUZON_CADA = 120  # segundos entre lecturas del buzón
 
 
 # ---------------------------------------------------------------- base de datos
@@ -655,6 +659,7 @@ def inicio():
         n_clientes = con.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
         n['revisar'] = n.get('revisar', 0) + con.execute(
             'SELECT COUNT(*) FROM anexos WHERE unido_a IS NULL').fetchone()[0]
+        faltan = faltan_total(con)
     accesos = [
         {'url': url_for('index'), 'nombre': 'Subir escaneo', 'icono': 'subir', 'color': 'coral',
          'aviso': f'{leyendo} leyéndose' if leyendo else ''},
@@ -665,6 +670,8 @@ def inicio():
          'aviso': ''},
         {'url': url_for('pendientes'), 'nombre': 'Por entregar', 'icono': 'entregar', 'color': 'violeta',
          'aviso': f"{n.get('pendiente_entrega', 0)} sin entregar" if n.get('pendiente_entrega') else ''},
+        {'url': url_for('mes_en_curso'), 'nombre': 'Mes en curso', 'icono': 'mes', 'color': 'verde',
+         'aviso': f'faltan {faltan}' if faltan else ''},
         {'url': url_for('facturas'), 'nombre': 'Facturas', 'icono': 'facturas', 'color': 'naranja',
          'aviso': ''},
         {'url': url_for('clientes'), 'nombre': 'Clientes', 'icono': 'clientes', 'color': 'verde',
@@ -674,6 +681,76 @@ def inicio():
     ]
     accesos = [a for a in accesos if a['nombre'] != 'Por entregar' or n.get('pendiente_entrega')]
     return render_template('inicio.html', accesos=accesos, n_clientes=n_clientes)
+
+
+# --------------------------------------------------------------- viajes del mes
+def viajes(con: sqlite3.Connection, mes: str | None = None) -> list[dict]:
+    """Cada orden de carga es un viaje: qué albaranes cita, cuáles están escaneados y cuáles
+    faltan, si vienen firmados y si ya se han enviado. `mes` = 'AAAA-MM' (por la fecha de carga)."""
+    albs = {r['numero']: dict(r) for r in con.execute(
+        "SELECT numero, estado, sellado, pales, destino, fecha_doc FROM albaranes "
+        "WHERE estado != 'descartado' AND numero IS NOT NULL")}
+    salida, vistos = [], set()
+    for o in con.execute("SELECT * FROM anexos WHERE tipo='orden_carga' ORDER BY fecha, id").fetchall():
+        fecha = o['fecha'] or o['creado'][:10]
+        if mes and not fecha.startswith(mes):
+            continue
+        citados = json.loads(o['citados'] or '[]') or json.loads(o['refs'] or '[]')
+        if not citados or tuple(citados) in vistos:
+            continue
+        vistos.add(tuple(citados))
+        estan = [albs[n] for n in citados if n in albs]
+        faltan = [n for n in citados if n not in albs]
+        destinos = [a['destino'] for a in estan if a['destino']]
+        sin_firma = sum(1 for a in estan if not a['sellado'])
+        enviados = sum(1 for a in estan if a['estado'] == 'entregado')
+        dudosos = sum(1 for a in estan if a['estado'] == 'revisar')
+        if faltan:
+            estado, texto = 'rojo', f'Faltan {len(faltan)}'
+        elif dudosos:
+            estado, texto = 'rojo', f'{dudosos} por revisar'
+        elif enviados == len(estan):
+            estado, texto = 'verde', 'Completo y enviado'
+        else:
+            estado, texto = 'ambar', 'Completo · sin enviar'
+        salida.append({'fecha': fecha, 'ref': o['ref_texto'], 'citados': citados, 'faltan': faltan,
+                       'escaneados': len(estan), 'destino': max(set(destinos), key=destinos.count) if destinos else '',
+                       'pales': sum(a['pales'] or 0 for a in estan), 'sin_firma': sin_firma,
+                       'enviados': enviados, 'estado': estado, 'texto': texto, 'unido_a': o['unido_a']})
+    return salida
+
+
+def albaranes_sin_orden(con: sqlite3.Connection, mes: str) -> list[dict]:
+    """Albaranes del mes que no cita ninguna orden de carga (escaneados sin su orden)."""
+    citados = set()
+    for o in con.execute("SELECT citados FROM anexos WHERE citados IS NOT NULL"):
+        citados.update(json.loads(o['citados']))
+    return [dict(r) for r in con.execute(
+        "SELECT numero, destino, pales, fecha_doc, estado FROM albaranes WHERE estado NOT IN ('descartado') "
+        "AND numero IS NOT NULL AND fecha_doc LIKE ? ORDER BY numero", (mes + '%',))
+        if r['numero'] not in citados]
+
+
+def faltan_total(con: sqlite3.Connection) -> int:
+    """Albaranes que citan las órdenes de carga y no se han escaneado (de los meses sin cerrar)."""
+    return sum(len(v['faltan']) for v in viajes(con) if v['estado'] == 'rojo')
+
+
+@app.route('/mes')
+@requiere_acceso
+def mes_en_curso():
+    """Cada viaje del mes con su semáforo: lo que falta antes de cerrar el mes."""
+    with db() as con:
+        meses = sorted({(o['fecha'] or o['creado'])[:7] for o in con.execute(
+            "SELECT fecha, creado FROM anexos WHERE tipo='orden_carga'")}, reverse=True)
+        mes = request.args.get('m') or (meses[0] if meses else f'{datetime.now():%Y-%m}')
+        lista = viajes(con, mes)
+        sueltos = albaranes_sin_orden(con, mes)
+    resumen = {k: sum(1 for v in lista if v['estado'] == k) for k in ('verde', 'ambar', 'rojo')}
+    return render_template('mes.html', mes=mes, meses=meses, viajes=lista, sueltos=sueltos,
+                           resumen=resumen, faltan=sum(len(v['faltan']) for v in lista),
+                           albaranes=sum(v['escaneados'] for v in lista) + len(sueltos),
+                           pales=sum(v['pales'] for v in lista))
 
 
 @app.route('/por-entregar')
@@ -784,7 +861,9 @@ def revision():
                                         'albaranes': []})
         g['albaranes'].append(a)
     dudosos = [a for a in filas if a['estado'] == 'revisar']
-    return render_template('revision.html', en_curso=en_curso, grupos=grupos, ordenes=ordenes,
+    with db() as con:  # viajes con albaranes que su orden de carga cita y no están
+        incompletos = [v for v in viajes(con) if v['faltan']]
+    return render_template('revision.html', incompletos=incompletos, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
                            con_repetidos=con_repetidos,
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
                            n_colocados=sum(len(g['albaranes']) for g in grupos.values()))
@@ -1162,6 +1241,17 @@ def ajustes():
                         continue  # clave vacía = conservar la guardada
                     cfg_set(con, c, valor)
                 flash('Comunicaciones guardadas.')
+            elif accion == 'buzon':
+                for c in CLAVES_IMAP:
+                    valor = request.form.get(c, '').strip()
+                    if c == 'imap_clave' and not valor:
+                        continue  # clave vacía = conservar la guardada
+                    cfg_set(con, c, valor)
+                cfg_set(con, 'imap_activo', '1' if request.form.get('imap_activo') else '0')
+                flash('Buzón guardado.')
+            elif accion == 'buzon_probar':
+                r = leer_buzon(solo_probar=True)
+                flash(r)
             elif accion == 'revision':
                 cfg_set(con, 'revisar_antes', '1' if request.form.get('revisar_antes') else '0')
                 flash('Guardado.')
@@ -1190,10 +1280,15 @@ def ajustes():
                     flash('Contraseña cambiada.')
             return redirect(url_for('ajustes'))
         smtp = {c: cfg_get(con, c) for c in CLAVES_SMTP}
+        buzon = {c: cfg_get(con, c) for c in CLAVES_IMAP if c != 'imap_clave'}
+        buzon['activo'] = cfg_get(con, 'imap_activo') == '1'
+        buzon['hay_clave'] = bool(cfg_get(con, 'imap_clave'))
+        buzon['estado'] = cfg_get(con, 'imap_estado')
+        buzon['comprobado'] = cfg_get(con, 'imap_comprobado')
         hay_clave = bool(cfg_get(con, 'clave_hash'))
         revisar_antes = cfg_get(con, 'revisar_antes') == '1'
         repaso = json.loads(cfg_get(con, 'repaso') or '{}')
-    return render_template('ajustes.html', repaso=repaso, smtp=smtp, hay_clave=hay_clave, version=VERSION,
+    return render_template('ajustes.html', repaso=repaso, smtp=smtp, buzon=buzon, hay_clave=hay_clave, version=VERSION,
                            revisar_antes=revisar_antes)
 
 
@@ -1451,12 +1546,100 @@ def factura_excel(fid):
                      download_name=nombre, mimetype='application/vnd.ms-excel')
 
 
+# ------------------------------------------------------------ buzón de entrada
+def leer_buzon(solo_probar: bool = False) -> str:
+    """Recoge los PDF de los correos no leídos del buzón (los que manda la Konica al escanear)
+    y los procesa como si se hubieran subido a mano. Solo PDF; si hay remitentes configurados,
+    solo de ellos. Cada correo se marca como leído al recogerlo, así no se procesa dos veces."""
+    import email
+    import email.utils
+    import imaplib
+    from email.header import decode_header, make_header
+    with db() as con:
+        cfg = {c: cfg_get(con, c) for c in CLAVES_IMAP}
+    if not (cfg['imap_host'] and cfg['imap_usuario'] and cfg['imap_clave']):
+        return 'Falta configurar el buzón (servidor, usuario y contraseña).'
+    permitidos = {x.strip().lower() for x in cfg['imap_remitentes'].split(',') if x.strip()}
+    recogidos, saltados = [], 0
+    try:
+        with imaplib.IMAP4_SSL(cfg['imap_host'], 993, timeout=60) as m:
+            m.login(cfg['imap_usuario'], cfg['imap_clave'])
+            m.select(cfg['imap_carpeta'] or 'INBOX')
+            _, datos = m.uid('search', None, 'UNSEEN')
+            uids = datos[0].split()
+            if solo_probar:
+                return f'Buzón correcto: {len(uids)} correo(s) sin leer esperando.'
+            for uid in uids:
+                _, partes = m.uid('fetch', uid, '(BODY.PEEK[])')
+                msg = email.message_from_bytes(partes[0][1])
+                remitente = email.utils.parseaddr(msg.get('From', ''))[1].lower()
+                if permitidos and remitente not in permitidos:
+                    saltados += 1
+                    m.uid('store', uid, '+FLAGS', '(\\Seen)')
+                    continue
+                for parte in msg.walk():
+                    nombre = parte.get_filename()
+                    if not nombre:
+                        continue
+                    nombre = str(make_header(decode_header(nombre)))
+                    cuerpo = parte.get_payload(decode=True) or b''
+                    if not (nombre.lower().endswith('.pdf') or cuerpo[:5] == b'%PDF-') \
+                            or len(cuerpo) > 80 * 1024 * 1024:
+                        continue
+                    ENTRADA.mkdir(parents=True, exist_ok=True)
+                    limpio = re.sub(r'[^A-Za-z0-9._-]+', '_', Path(nombre).name) or 'escaneo.pdf'
+                    destino = ENTRADA / f'{datetime.now():%Y%m%d-%H%M%S}-correo-{uid.decode()}-{limpio}'
+                    destino.write_bytes(cuerpo)
+                    recogidos.append((limpio, destino))
+                m.uid('store', uid, '+FLAGS', '(\\Seen)')
+    except Exception as e:
+        texto = f'Error al leer el buzón: {e}'
+        with db() as con:
+            cfg_set(con, 'imap_estado', f'{datetime.now():%d/%m %H:%M} · {texto}')
+        return texto
+    for nombre, destino in recogidos:
+        with db() as con:
+            lote_id = con.execute('INSERT INTO lotes (fichero, recibido) VALUES (?,?)',
+                                  (f'{nombre} (por correo)', datetime.now().isoformat(timespec='seconds'))).lastrowid
+        threading.Thread(target=procesar_lote, args=(lote_id, destino), daemon=True).start()
+    texto = f'{len(recogidos)} escaneo(s) recogido(s)' + (f', {saltados} correo(s) de otros remitentes ignorados' if saltados else '')
+    with db() as con:
+        cfg_set(con, 'imap_comprobado', f'{datetime.now():%d/%m %H:%M}')
+        if recogidos or saltados or 'Error' in cfg_get(con, 'imap_estado'):
+            cfg_set(con, 'imap_estado', f'{datetime.now():%d/%m %H:%M} · ' + (texto if recogidos or saltados else 'conexión recuperada'))
+    return texto
+
+
+def vigilar_buzon() -> None:
+    """Hilo de fondo: cada BUZON_CADA segundos lee el buzón si está activado. Con varios
+    procesos de gunicorn, un candado de fichero hace que solo uno lo lea cada vez."""
+    import fcntl
+    import time
+    while True:
+        time.sleep(BUZON_CADA)
+        try:
+            with db() as con:
+                activo = cfg_get(con, 'imap_activo') == '1'
+            if not activo:
+                continue
+            with open(DATA / '.buzon.lock', 'w') as candado:
+                try:
+                    fcntl.flock(candado, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    continue  # otro proceso lo está leyendo
+                leer_buzon()
+        except Exception:
+            pass  # el error queda en imap_estado; el hilo no se para nunca
+
+
 @app.route('/salud')
 def salud():
     return {'ok': True, 'version': VERSION}
 
 
 init_db()
+if os.environ.get('BUZON_HILO', '1') == '1':
+    threading.Thread(target=vigilar_buzon, daemon=True).start()
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5055, debug=False)

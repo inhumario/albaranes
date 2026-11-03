@@ -137,7 +137,7 @@ main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--cora
 {% set modulos = {'index':'Subir escaneo','revision':'Revisión','albaranes':'Archivo','carpeta_zip':'Archivo',
                   'pendientes':'Por entregar','portal':'Por entregar',
                   'facturas':'Facturas','factura_ver':'Facturas',
-                  'clientes':'Clientes','cliente_form':'Clientes','ajustes':'Ajustes','inicio':'Albaranes'} %}
+                  'clientes':'Clientes','cliente_form':'Clientes','ajustes':'Ajustes','inicio':'Albaranes','mes_en_curso':'Mes en curso'} %}
 <header class="topbar">
   <a class="apps" href="{{ url_for('inicio') }}" title="Inicio">
     <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true">
@@ -154,6 +154,7 @@ main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--cora
       {% if n_por_entregar or request.endpoint in ('pendientes','portal') %}
       <a href="{{ url_for('pendientes') }}" class="{{ 'activo' if request.endpoint in ('pendientes','portal') }}">Por entregar{% if n_por_entregar %} <span class="cuenta-menu">{{ n_por_entregar }}</span>{% endif %}</a>
       {% endif %}
+      <a href="{{ url_for('mes_en_curso') }}" class="{{ 'activo' if request.endpoint in ('mes_en_curso',) }}">Mes en curso</a>
       <a href="{{ url_for('facturas') }}" class="{{ 'activo' if request.endpoint in ('facturas','factura_ver') }}">Facturas</a>
       <a href="{{ url_for('clientes') }}" class="{{ 'activo' if request.endpoint in ('clientes','cliente_form') }}">Clientes</a>
       <a href="{{ url_for('ajustes') }}" class="{{ 'activo' if request.endpoint in ('ajustes',) }}">Ajustes</a>

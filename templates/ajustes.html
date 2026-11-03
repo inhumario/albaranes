@@ -36,6 +36,31 @@ Lo ya entregado no se toca: solo se avisa.</p>
 </div>
 {% endif %}
 
+<h2>Escanear directo a la app — buzón de entrada</h2>
+<p class="mini" style="max-width:640px">La Konica escanea a un correo (botón «Albaranes» en su libreta de direcciones) y la app
+recoge los PDF de ese buzón cada 2 minutos, sin pasar por el ordenador. Cada correo se marca como leído al recogerlo.
+Solo se cogen PDF; si pones remitentes, solo los suyos.</p>
+{% if buzon.comprobado or buzon.estado %}<p class="mini">{% if buzon.comprobado %}<strong>Comprobado:</strong> {{ buzon.comprobado }}{% endif %}{% if buzon.estado %} · <strong>Último movimiento:</strong> {{ buzon.estado }}{% endif %}</p>{% endif %}
+<form method="post" style="max-width:560px">
+  <input type="hidden" name="accion" value="buzon">
+  <label style="display:flex;gap:.5rem;align-items:center"><input type="checkbox" id="imap_activo" name="imap_activo" style="width:auto" {{ 'checked' if buzon.activo }}> Recoger los escaneos de este buzón</label>
+  <label for="imap_host">Servidor IMAP <span class="mini">(SSL, puerto 993)</span></label>
+  <input type="text" id="imap_host" name="imap_host" value="{{ buzon.imap_host }}" placeholder="imap.suempresa.com">
+  <label for="imap_usuario">Usuario</label>
+  <input type="text" id="imap_usuario" name="imap_usuario" value="{{ buzon.imap_usuario }}" placeholder="albaranes@suempresa.com">
+  <label for="imap_clave">Contraseña <span class="mini">{{ '(guardada; en blanco = conservarla)' if buzon.hay_clave else '' }}</span></label>
+  <input type="password" id="imap_clave" name="imap_clave" value="">
+  <label for="imap_carpeta">Carpeta</label>
+  <input type="text" id="imap_carpeta" name="imap_carpeta" value="{{ buzon.imap_carpeta or 'INBOX' }}">
+  <label for="imap_remitentes">Remitentes permitidos <span class="mini">(separados por comas; en blanco = cualquiera)</span></label>
+  <input type="text" id="imap_remitentes" name="imap_remitentes" value="{{ buzon.imap_remitentes }}" placeholder="escaner@suempresa.com">
+  <p style="display:flex;gap:.5rem;flex-wrap:wrap"><button class="boton">Guardar buzón</button></p>
+</form>
+<form method="post" style="max-width:560px">
+  <input type="hidden" name="accion" value="buzon_probar">
+  <p><button class="boton suave">Probar conexión</button></p>
+</form>
+
 <h2>Comunicaciones — email saliente (SMTP)</h2>
 <form method="post" style="max-width:560px">
   <input type="hidden" name="accion" value="smtp">

@@ -58,6 +58,22 @@
 </div>
 {% endif %}
 
+{% if incompletos %}
+<div class="carpeta dudas">
+  <div class="carpeta-cab">
+    <span class="ruta">⚠️ Faltan albaranes de {{ incompletos|length }} viaje{{ 's' if incompletos|length > 1 }}</span>
+    <span class="destino">la orden de carga los cita y no se han escaneado; en cuanto se escaneen, el aviso se quita solo · <a href="{{ url_for('mes_en_curso') }}">ver el mes</a></span>
+  </div>
+  <div class="tabla-scroll" style="padding:.6rem .9rem"><table>
+  <tr><th>Carga</th><th>Orden de carga</th><th>Destino</th><th>Faltan</th></tr>
+  {% for v in incompletos %}
+  <tr><td>{{ v.fecha[8:10] }}/{{ v.fecha[5:7] }}</td><td><strong>{{ v.ref }}</strong></td><td>{{ v.destino or '—' }}</td>
+      <td style="color:var(--rojo)">{{ v.faltan|join(', ') }}</td></tr>
+  {% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
 {% if ordenes %}
 <div class="carpeta dudas">
   <div class="carpeta-cab">

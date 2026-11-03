@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block titulo %}Mes en curso · Albaranes · Inhumario{% endblock %}
+{% block cuerpo %}
+<style>
+.mes-cab{display:flex;gap:1rem;align-items:baseline;flex-wrap:wrap;justify-content:space-between}
+.meses{display:flex;gap:.4rem;flex-wrap:wrap}
+.meses a{padding:.25rem .7rem;border-radius:99px;border:1px solid var(--borde);background:#fff;color:var(--ink);text-decoration:none;font-size:.88rem}
+.meses a.activo{background:var(--ink);color:#fff;border-color:var(--ink)}
+.semaforo{display:inline-flex;align-items:center;gap:.4rem;padding:.1rem .6rem;border-radius:99px;font-size:.82rem;font-weight:600;white-space:nowrap}
+.semaforo::before{content:"";width:9px;height:9px;border-radius:50%;background:currentColor}
+.semaforo.verde{background:#E4F3EB;color:#1F7A50}
+.semaforo.ambar{background:var(--aviso-f);color:var(--aviso)}
+.semaforo.rojo{background:var(--rojo-f);color:var(--rojo)}
+tr.fila-rojo td:first-child{box-shadow:inset 4px 0 0 var(--rojo)}
+.faltan{color:var(--rojo);font-size:.85rem}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+</style>
+<div class="mes-cab">
+  <h1>Mes en curso</h1>
+  <div class="meses">{% for m in meses %}<a href="{{ url_for('mes_en_curso', m=m) }}" class="{{ 'activo' if m == mes }}">{{ m[5:7] }}/{{ m[:4] }}</a>{% endfor %}</div>
+</div>
+<p class="mini">Cada orden de carga es un viaje. Aquí se ve, antes de cerrar el mes, qué viaje está completo y qué falta por escanear o por enviar.</p>
+
+<div class="tarjetas">
+  <div class="tarjeta"><div class="n">{{ viajes|length }}</div><div class="t">viajes ({{ mes[5:7] }}/{{ mes[:4] }})</div></div>
+  <div class="tarjeta"><div class="n">{{ albaranes }}</div><div class="t">albaranes escaneados</div></div>
+  <div class="tarjeta"><div class="n" style="color:{{ 'var(--rojo)' if faltan else 'inherit' }}">{{ faltan }}</div><div class="t">albaranes que faltan</div></div>
+  <div class="tarjeta"><div class="n">{{ '{:,.0f}'.format(pales).replace(',', '.') }}</div><div class="t">palés</div></div>
+</div>
+<p style="display:flex;gap:.5rem;flex-wrap:wrap">
+  <span class="semaforo rojo">{{ resumen.rojo }} con algo pendiente</span>
+  <span class="semaforo ambar">{{ resumen.ambar }} completos sin enviar</span>
+  <span class="semaforo verde">{{ resumen.verde }} completos y enviados</span>
+</p>
+
+<div class="tabla-scroll"><table>
+<tr><th>Carga</th><th>Orden de carga</th><th>Destino</th><th style="text-align:right">Albaranes</th><th style="text-align:right">Palés</th><th>Firmados</th><th>Estado</th></tr>
+{% for v in viajes|sort(attribute='estado', reverse=True)|sort(attribute='fecha') %}
+<tr class="fila-{{ v.estado }}">
+  <td style="white-space:nowrap">{{ v.fecha[8:10] }}/{{ v.fecha[5:7] }}</td>
+  <td><strong>{{ v.ref }}</strong>
+    {% if v.faltan %}<div class="faltan">Falta{{ 'n' if v.faltan|length > 1 }}: {{ v.faltan|join(', ') }}</div>{% endif %}</td>
+  <td>{{ v.destino or '—' }}</td>
+  <td class="num">{{ v.escaneados }} / {{ v.citados|length }}</td>
+  <td class="num">{{ '{:g}'.format(v.pales) if v.pales else '—' }}</td>
+  <td>{% if v.escaneados %}{{ 'todos' if not v.sin_firma else (v.sin_firma ~ ' sin firma') }}{% else %}—{% endif %}</td>
+  <td><span class="semaforo {{ v.estado }}">{{ v.texto }}</span></td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="mini">No hay órdenes de carga escaneadas de este mes.</td></tr>
+{% endfor %}
+</table></div>
+
+{% if sueltos %}
+<h2>Albaranes sin su orden de carga</h2>
+<p class="mini">Están escaneados con fecha de este mes, pero ninguna orden de carga los cita. Suele ser que la orden no se ha escaneado.</p>
+<div class="tabla-scroll"><table>
+<tr><th>Albarán</th><th>Carga</th><th>Destino</th><th style="text-align:right">Palés</th></tr>
+{% for a in sueltos %}
+<tr><td><strong>{{ a.numero }}</strong></td><td>{{ a.fecha_doc[8:10] }}/{{ a.fecha_doc[5:7] }}</td><td>{{ a.destino or '—' }}</td><td class="num">{{ '{:g}'.format(a.pales) if a.pales else '—' }}</td></tr>
+{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}
