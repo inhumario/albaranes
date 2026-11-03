@@ -151,7 +151,8 @@ def _api() -> anthropic.Anthropic:
             sys.path.insert(0, str(Path.home() / '.config/aromas'))
             from infisical_get import get_secrets
             clave = get_secrets('anthropic')['ANTHROPIC_API_KEY']
-        _cliente_api = anthropic.Anthropic(api_key=clave)
+        # reintenta solo ante saturación (429/529) o cortes, con espera creciente
+        _cliente_api = anthropic.Anthropic(api_key=clave, max_retries=8)
     return _cliente_api
 
 
@@ -176,16 +177,23 @@ PROMPT_AMPLIADA = ('Esto es un albarán escaneado a alta resolución. Lee el nú
                    'y nada más. Ejemplo de respuesta: 1 2 3 4 5 6 7 8. Si no lo ves, responde NO.')
 
 
+import threading as _threading
+# Tope de lecturas a la vez en todo el proceso: si suben el mes entero de golpe (39 PDF) no
+# salen cientos de llamadas simultáneas, se ponen en cola
+_LECTURAS = _threading.BoundedSemaphore(8)
+
+
 def _pedir(datos: str, prompt: str, max_tokens: int = 300, modelo: str = MODELO) -> str:
     # sin temperature: desde oct-2026 la API la rechaza también en Haiku («Extra inputs
     # are not permitted»); la fiabilidad la da la lectura de contraste descorrelacionada
     max_tokens = max(max_tokens, 2000)  # margen para el razonamiento previo del modelo
-    resp = _api().messages.create(
-        model=modelo, max_tokens=max_tokens,
-        messages=[{'role': 'user', 'content': [
-            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': datos}},
-            {'type': 'text', 'text': prompt},
-        ]}])
+    with _LECTURAS:
+        resp = _api().messages.create(
+            model=modelo, max_tokens=max_tokens,
+            messages=[{'role': 'user', 'content': [
+                {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': datos}},
+                {'type': 'text', 'text': prompt},
+            ]}])
     # Sonnet puede anteponer un bloque de razonamiento: se junta solo el texto
     return ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
 

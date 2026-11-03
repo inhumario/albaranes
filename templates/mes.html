@@ -14,6 +14,17 @@
 tr.fila-rojo td:first-child{box-shadow:inset 4px 0 0 var(--rojo)}
 .faltan{color:var(--rojo);font-size:.85rem}
 td.num{text-align:right;font-variant-numeric:tabular-nums}
+.cierre{background:#fff;border:1px solid var(--borde);border-radius:10px;padding:1rem 1.1rem;margin:1rem 0 1.4rem}
+.cierre h2{margin:.1rem 0 .6rem;font-size:1.15rem}
+.checks{list-style:none;margin:0 0 .9rem;padding:0;display:grid;gap:.45rem}
+.checks li{display:grid;grid-template-columns:1.6rem 1fr;gap:.4rem;align-items:start}
+.checks .ic{font-weight:700;text-align:center;border-radius:50%;width:1.4rem;height:1.4rem;line-height:1.4rem;font-size:.8rem}
+.checks .ok .ic{background:#E4F3EB;color:#1F7A50}
+.checks .aviso .ic{background:var(--aviso-f);color:var(--aviso)}
+.checks .falta .ic{background:var(--rojo-f);color:var(--rojo)}
+.checks .det{font-size:.82rem;color:var(--sub);word-break:break-word}
+.acciones{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+.cerrado{background:#E4F3EB;color:#1F7A50;border-radius:8px;padding:.6rem .8rem;margin-bottom:.8rem}
 </style>
 <div class="mes-cab">
   <h1>Mes en curso</h1>
@@ -33,6 +44,42 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   <span class="semaforo verde">{{ resumen.verde }} completos y enviados</span>
 </p>
 
+<section class="cierre" id="cierre">
+  <h2>Cierre del mes {{ mes[5:7] }}/{{ mes[:4] }}</h2>
+  {% if cierre.get('fecha') %}
+  <div class="cerrado">✓ Mes cerrado el {{ cierre.fecha[8:10] }}/{{ cierre.fecha[5:7] }} a las {{ cierre.fecha[11:16] }}: {{ cierre.albaranes }} albaranes dados por entregados{{ ' (con ' ~ cierre.avisos ~ ' aviso(s) aceptados)' if cierre.avisos }}.</div>
+  {% endif %}
+  {% set n_falta = checks|selectattr('nivel', 'equalto', 'falta')|list|length %}
+  {% set n_aviso = checks|selectattr('nivel', 'equalto', 'aviso')|list|length %}
+  <ul class="checks">
+  {% for c in checks %}
+    <li class="{{ c.nivel }}"><span class="ic">{{ '✓' if c.nivel == 'ok' else ('!' if c.nivel == 'aviso' else '✕') }}</span>
+      <div>{% if c.enlace %}<a href="{{ c.enlace }}">{{ c.texto }}</a>{% else %}{{ c.texto }}{% endif %}
+        {% if c.detalle %}<div class="det">{{ c.detalle }}</div>{% endif %}</div></li>
+  {% endfor %}
+  </ul>
+  <div class="acciones">
+    <a class="boton suave" href="{{ url_for('mes_paquete', mes=mes) }}">⬇ Descargar el mes (albaranes nombrados{{ ' + Excel' if fac }})</a>
+    {% if fac %}<a class="boton suave" href="{{ url_for('factura_excel', fid=fac['id']) }}">⬇ Solo el Excel</a>{% endif %}
+  </div>
+  {% if not cierre.get('fecha') %}
+  <form method="post" action="{{ url_for('mes_cerrar', mes=mes) }}" style="margin-top:.9rem">
+    <p class="mini">Cuando el paquete se haya mandado a Delaviuda, cierra el mes: sus albaranes quedan como entregados con la fecha de hoy.</p>
+    {% if n_falta or n_aviso %}
+    <label style="display:flex;gap:.5rem;align-items:center;font-size:.9rem"><input type="checkbox" id="confirmo" name="confirmo" style="width:auto">
+      Cerrar igualmente con {{ n_falta + n_aviso }} punto(s) sin resolver</label>
+    {% endif %}
+    <p><button class="boton">Cerrar el mes</button></p>
+  </form>
+  {% else %}
+  <form method="post" action="{{ url_for('mes_cerrar', mes=mes) }}" style="margin-top:.9rem">
+    <input type="hidden" name="accion" value="reabrir">
+    <button class="boton suave">Reabrir el mes</button>
+  </form>
+  {% endif %}
+</section>
+
+<h2>Viajes</h2>
 <div class="tabla-scroll"><table>
 <tr><th>Carga</th><th>Orden de carga</th><th>Destino</th><th style="text-align:right">Albaranes</th><th style="text-align:right">Palés</th><th>Firmados</th><th>Estado</th></tr>
 {% for v in viajes|sort(attribute='estado', reverse=True)|sort(attribute='fecha') %}

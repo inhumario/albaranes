@@ -21,7 +21,7 @@ import secrets
 import smtplib
 import sqlite3
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from functools import wraps
 from pathlib import Path
@@ -33,7 +33,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -324,6 +324,25 @@ def estado_final(cliente) -> str:
     return 'pendiente_entrega' if cliente and cliente['modo_entrega'] != 'ninguna' else 'archivado'
 
 
+_ESCRITURA = threading.Lock()
+
+
+def lotes_con_error(con: sqlite3.Connection) -> list:
+    """Escaneos de la última semana que no se han podido leer (hay que volver a subirlos)."""
+    desde = (datetime.now() - timedelta(days=7)).isoformat(timespec='seconds')
+    return con.execute("SELECT * FROM lotes l WHERE estado LIKE 'error%' AND recibido >= ? "
+                       "AND NOT EXISTS (SELECT 1 FROM lotes l2 WHERE l2.fichero=l.fichero AND l2.id > l.id "
+                       "AND l2.estado='procesado') ORDER BY id", (desde,)).fetchall()  # ya resubido: fuera
+
+
+def lotes_colgados(con: sqlite3.Connection) -> None:
+    """Un escaneo que lleva más de una hora «leyéndose» se cortó (reinicio de la app): se
+    marca con error para que no se quede la pantalla esperando y se pueda volver a subir."""
+    limite = (datetime.now() - timedelta(hours=1)).isoformat(timespec='seconds')
+    con.execute("UPDATE lotes SET estado='error: se cortó la lectura (reinicio). Vuelve a subir este PDF' "
+                "WHERE estado='procesando' AND recibido < ?", (limite,))
+
+
 def procesar_lote(lote_id: int, pdf: Path) -> None:
     def avance(hechas, total):
         with db() as con:
@@ -331,7 +350,9 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
     try:
         grupos = procesador.procesar_pdf(pdf, avance)
         ahora = datetime.now()
-        with db() as con:
+        # la lectura va en paralelo; el archivado, de uno en uno: dos escaneos con copias del
+        # mismo albarán no pueden darlo de alta los dos a la vez
+        with _ESCRITURA, db() as con:
             revisar_antes = cfg_get(con, 'revisar_antes') == '1'
             descartados = []  # copias repetidas: solo hace falta una
             for n, g in enumerate(grupos):
@@ -655,17 +676,20 @@ def inicio():
     """Pantalla de entrada tipo Odoo: un acceso por área, con su aviso si hay algo pendiente."""
     with db() as con:
         n = dict(con.execute('SELECT estado, COUNT(*) FROM albaranes GROUP BY estado').fetchall())
+        lotes_colgados(con)
         leyendo = con.execute("SELECT COUNT(*) FROM lotes WHERE estado='procesando'").fetchone()[0]
         n_clientes = con.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
         n['revisar'] = n.get('revisar', 0) + con.execute(
             'SELECT COUNT(*) FROM anexos WHERE unido_a IS NULL').fetchone()[0]
         faltan = faltan_total(con)
+        errores = len(lotes_con_error(con))
     accesos = [
         {'url': url_for('index'), 'nombre': 'Subir escaneo', 'icono': 'subir', 'color': 'coral',
          'aviso': f'{leyendo} leyéndose' if leyendo else ''},
+        # solo lo que necesita una persona: números dudosos, órdenes sin su albarán y escaneos
+        # que no se han podido leer (lo colocado y bien leído no es «por revisar»)
         {'url': url_for('revision'), 'nombre': 'Revisión', 'icono': 'revision', 'color': 'azul',
-         'aviso': (f"{n.get('colocado', 0) + n.get('revisar', 0)} por revisar"
-                   if n.get('colocado', 0) + n.get('revisar', 0) else '')},
+         'aviso': f"{n.get('revisar', 0) + errores} por revisar" if n.get('revisar', 0) + errores else ''},
         {'url': url_for('albaranes'), 'nombre': 'Archivo', 'icono': 'archivo', 'color': 'ambar',
          'aviso': ''},
         {'url': url_for('pendientes'), 'nombre': 'Por entregar', 'icono': 'entregar', 'color': 'violeta',
@@ -746,11 +770,127 @@ def mes_en_curso():
         mes = request.args.get('m') or (meses[0] if meses else f'{datetime.now():%Y-%m}')
         lista = viajes(con, mes)
         sueltos = albaranes_sin_orden(con, mes)
+        cierre = json.loads(cfg_get(con, f'cierre_{mes}') or '{}')
+        checks = comprobar_cierre(con, mes, lista)
+        fac = factura_del_mes(con, mes)
     resumen = {k: sum(1 for v in lista if v['estado'] == k) for k in ('verde', 'ambar', 'rojo')}
     return render_template('mes.html', mes=mes, meses=meses, viajes=lista, sueltos=sueltos,
+                           cierre=cierre, checks=checks, fac=fac,
                            resumen=resumen, faltan=sum(len(v['faltan']) for v in lista),
                            albaranes=sum(v['escaneados'] for v in lista) + len(sueltos),
                            pales=sum(v['pales'] for v in lista))
+
+
+def factura_del_mes(con: sqlite3.Connection, mes: str):
+    return con.execute("SELECT * FROM facturas WHERE estado='lista' AND fecha LIKE ? ORDER BY id DESC",
+                       (mes + '%',)).fetchone()
+
+
+def comprobar_cierre(con: sqlite3.Connection, mes: str, lista: list[dict]) -> list[dict]:
+    """Lo que hay que mirar antes de cerrar el mes. nivel: ok · aviso (se puede cerrar
+    sabiéndolo) · falta (lo normal es arreglarlo antes)."""
+    c = []
+    faltan = [n for v in lista for n in v['faltan']]
+    c.append({'nivel': 'falta' if faltan else 'ok',
+              'texto': f'{len(faltan)} albarán(es) que cita una orden de carga y no están escaneados' if faltan
+              else 'Todos los albaranes de las órdenes de carga están escaneados',
+              'detalle': ', '.join(faltan[:30]) + (' …' if len(faltan) > 30 else '')})
+    dudosos = con.execute("SELECT COUNT(*) FROM albaranes WHERE estado='revisar'").fetchone()[0] + \
+        con.execute('SELECT COUNT(*) FROM anexos WHERE unido_a IS NULL').fetchone()[0]
+    errores = len(lotes_con_error(con))
+    c.append({'nivel': 'falta' if dudosos or errores else 'ok',
+              'texto': (f'{dudosos} cosa(s) por revisar' + (f' y {errores} escaneo(s) sin leer' if errores else '')
+                        if dudosos or errores else 'Nada pendiente en Revisión'),
+              'detalle': 'números dudosos u órdenes de carga sin su albarán' if dudosos else '',
+              'enlace': url_for('revision') if dudosos or errores else ''})
+    sin_firma = sum(v['sin_firma'] for v in lista)
+    c.append({'nivel': 'aviso' if sin_firma else 'ok',
+              'texto': f'{sin_firma} albarán(es) sin firma ni sello de recepción' if sin_firma
+              else 'Todos los albaranes vienen firmados', 'detalle': ''})
+    fac = factura_del_mes(con, mes)
+    if not fac:
+        c.append({'nivel': 'falta', 'texto': 'Falta subir la factura del mes', 'detalle': '',
+                  'enlace': url_for('facturas')})
+        return c
+    datos = cruzar_factura(json.loads(fac['datos']), con)
+    con.execute('UPDATE facturas SET datos=? WHERE id=?', (json.dumps(datos), fac['id']))
+    reales = [v for v in datos['viajes'] if v['estado'] != 'suelta']
+    mal = [v for v in reales if v['estado'] != 'ok']
+    c.append({'nivel': 'ok' if datos.get('cuadra') else 'falta',
+              'texto': f"Factura {fac['numero']} leída" + (' y sus líneas cuadran con el total' if datos.get('cuadra')
+                                                          else ': las líneas NO suman el total'),
+              'detalle': '', 'enlace': url_for('factura_ver', fid=fac['id'])})
+    c.append({'nivel': 'aviso' if mal else 'ok',
+              'texto': f'{len(mal)} de {len(reales)} viajes de la factura no cuadran (palés o albaranes)' if mal
+              else f'Los {len(reales)} viajes de la factura cuadran con sus albaranes',
+              'detalle': ', '.join(f"{v['viaje']} ({v['estado']})" for v in mal[:20]),
+              'enlace': url_for('factura_ver', fid=fac['id'])})
+    sf = datos.get('sin_facturar') or []
+    c.append({'nivel': 'aviso' if sf else 'ok',
+              'texto': f'{len(sf)} albarán(es) escaneado(s) que no están en ningún viaje de la factura' if sf
+              else 'Todo lo escaneado está en la factura',
+              'detalle': ', '.join(a['numero'] for a in sf), 'enlace': url_for('factura_ver', fid=fac['id'])})
+    return c
+
+
+def albaranes_del_mes(con: sqlite3.Connection, mes: str) -> list:
+    return con.execute("SELECT * FROM albaranes WHERE fecha_doc LIKE ? AND estado NOT IN ('descartado', 'revisar') "
+                       "AND numero IS NOT NULL ORDER BY ruta", (mes + '%',)).fetchall()
+
+
+@app.route('/mes/<mes>/paquete')
+@requiere_acceso
+def mes_paquete(mes):
+    """Todo lo del mes en un ZIP: los albaranes ya nombrados, por carpetas, y el Excel."""
+    import io
+    import zipfile
+    if not re.fullmatch(r'\d{4}-\d{2}', mes):
+        return redirect(url_for('mes_en_curso'))
+    buf = io.BytesIO()
+    with db() as con, zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
+        for a in albaranes_del_mes(con, mes):
+            ruta = DATA / a['ruta']
+            if ruta.exists():
+                z.write(ruta, Path(a['ruta']).relative_to('archivo'))
+        fac = factura_del_mes(con, mes)
+        if fac:
+            contenido, nombre = excel_de_factura(con, fac)
+            z.writestr(nombre, contenido)
+    buf.seek(0)
+    return send_file(buf, mimetype='application/zip', as_attachment=True,
+                     download_name=f'albaranes-{mes}.zip')
+
+
+@app.route('/mes/<mes>/cerrar', methods=['POST'])
+@requiere_acceso
+def mes_cerrar(mes):
+    """Da el mes por entregado: lo de cada cliente queda «entregado» con la fecha del cierre y
+    lo que no tiene cliente, archivado. Se usa después de mandar el paquete."""
+    if not re.fullmatch(r'\d{4}-\d{2}', mes):
+        return redirect(url_for('mes_en_curso'))
+    with db() as con:
+        if request.form.get('accion') == 'reabrir':
+            con.execute("UPDATE albaranes SET estado='colocado', entregado_el=NULL, entrega_nota='' "
+                        "WHERE fecha_doc LIKE ? AND entrega_nota LIKE 'Cierre del mes%'", (mes + '%',))
+            cfg_set(con, f'cierre_{mes}', '')
+            flash(f'Mes {mes[5:]}/{mes[:4]} reabierto.')
+            return redirect(url_for('mes_en_curso', m=mes))
+        avisos = [x for x in comprobar_cierre(con, mes, viajes(con, mes)) if x['nivel'] != 'ok']
+        if avisos and not request.form.get('confirmo'):
+            flash('Hay avisos sin resolver: marca la casilla para cerrar el mes igualmente.')
+            return redirect(url_for('mes_en_curso', m=mes) + '#cierre')
+        ahora = datetime.now().isoformat(timespec='seconds')
+        nota = f'Cierre del mes {mes[5:]}/{mes[:4]}'
+        n = 0
+        for a in albaranes_del_mes(con, mes):
+            if a['estado'] == 'entregado':
+                continue
+            con.execute('UPDATE albaranes SET estado=?, entregado_el=?, entrega_nota=? WHERE id=?',
+                        ('entregado' if a['cliente_id'] else 'archivado', ahora, nota, a['id']))
+            n += 1
+        cfg_set(con, f'cierre_{mes}', json.dumps({'fecha': ahora, 'albaranes': n, 'avisos': len(avisos)}))
+    flash(f'Mes {mes[5:]}/{mes[:4]} cerrado: {n} albaranes dados por entregados.')
+    return redirect(url_for('mes_en_curso', m=mes))
 
 
 @app.route('/por-entregar')
@@ -833,6 +973,7 @@ def subir():
 @requiere_acceso
 def revision():
     with db() as con:
+        lotes_colgados(con)
         en_curso = con.execute("SELECT * FROM lotes WHERE estado='procesando' ORDER BY id").fetchall()
         con_repetidos = con.execute(
             "SELECT fichero, descartados FROM lotes WHERE descartados != '' AND recibido >= ? "
@@ -863,7 +1004,8 @@ def revision():
     dudosos = [a for a in filas if a['estado'] == 'revisar']
     with db() as con:  # viajes con albaranes que su orden de carga cita y no están
         incompletos = [v for v in viajes(con) if v['faltan']]
-    return render_template('revision.html', incompletos=incompletos, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
+        errores = lotes_con_error(con)
+    return render_template('revision.html', incompletos=incompletos, errores=errores, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
                            con_repetidos=con_repetidos,
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
                            n_colocados=sum(len(g['albaranes']) for g in grupos.values()))
@@ -1459,6 +1601,17 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
         cantidad = v.get('cantidad') or 0
         v['estado'] = ('sin albaranes' if not vistos else 'faltan escaneos' if v['faltan']
                        else 'ok' if cantidad <= 1 or abs(pales - cantidad) < 0.01 else 'palés no cuadran')
+    # para cerrar el círculo: lo escaneado del mes que no está en ningún viaje de la factura
+    # (¿un viaje sin facturar?) y lo facturado que no se ha escaneado
+    mes = (datos.get('fecha') or '')[:7]
+    en_factura = {n for v in viajes for n in v['albaranes']}
+    datos['sin_facturar'] = [
+        {'numero': r['numero'], 'destino': r['destino'], 'pales': r['pales'], 'fecha': r['fecha_doc']}
+        for r in con.execute("SELECT numero, destino, pales, fecha_doc FROM albaranes WHERE cliente_id IS NOT NULL "
+                             "AND estado NOT IN ('descartado', 'revisar') AND numero IS NOT NULL AND fecha_doc LIKE ? "
+                             "ORDER BY numero", (mes + '%',))
+        if r['numero'] not in en_factura] if mes else []
+    datos['no_escaneados'] = sorted({n for v in viajes for n in v.get('faltan', [])})
     return datos
 
 
@@ -1529,20 +1682,26 @@ def factura_ver(fid):
     return render_template('factura.html', fac=fac, datos=datos, albs=albs)
 
 
+def excel_de_factura(con: sqlite3.Connection, fac) -> tuple[bytes, str]:
+    """El Excel de liquidación de una factura, con su nombre de fichero de siempre."""
+    datos = json.loads(fac['datos'])
+    albs = {r['numero']: {'peso': r['peso_kg'], 'pales': r['pales']} for r in con.execute(
+        "SELECT numero, peso_kg, pales FROM albaranes WHERE estado != 'descartado' AND numero IS NOT NULL")}
+    fijos = {'cmr': cfg_get(con, 'excel_cmr', 'NO'),
+             'codigo': int(cfg_get(con, 'excel_codigo', '20110') or 0) or cfg_get(con, 'excel_codigo'),
+             'nombre': cfg_get(con, 'excel_nombre', 'TRANS J. ROMERO S.L.')}
+    nombre = f"EXCEL_DELAVIUDA_{exportar.nombre_hoja(datos.get('numero'), datos.get('fecha')).split('(')[0].strip().replace(' ', '_').replace('º', '')}.xls"
+    return exportar.excel(datos, albs, fijos), nombre
+
+
 @app.route('/factura/<int:fid>/excel')
 @requiere_acceso
 def factura_excel(fid):
     import io
     with db() as con:
         fac = con.execute('SELECT * FROM facturas WHERE id=?', (fid,)).fetchone()
-        datos = json.loads(fac['datos'])
-        albs = {r['numero']: {'peso': r['peso_kg'], 'pales': r['pales']} for r in con.execute(
-            "SELECT numero, peso_kg, pales FROM albaranes WHERE estado != 'descartado' AND numero IS NOT NULL")}
-        fijos = {'cmr': cfg_get(con, 'excel_cmr', 'NO'),
-                 'codigo': int(cfg_get(con, 'excel_codigo', '20110') or 0) or cfg_get(con, 'excel_codigo'),
-                 'nombre': cfg_get(con, 'excel_nombre', 'TRANS J. ROMERO S.L.')}
-    nombre = f"EXCEL_DELAVIUDA_{exportar.nombre_hoja(datos.get('numero'), datos.get('fecha')).split('(')[0].strip().replace(' ', '_').replace('º', '')}.xls"
-    return send_file(io.BytesIO(exportar.excel(datos, albs, fijos)), as_attachment=True,
+        contenido, nombre = excel_de_factura(con, fac)
+    return send_file(io.BytesIO(contenido), as_attachment=True,
                      download_name=nombre, mimetype='application/vnd.ms-excel')
 
 

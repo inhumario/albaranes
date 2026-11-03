@@ -58,6 +58,19 @@
 </div>
 {% endif %}
 
+{% if errores %}
+<div class="carpeta dudas">
+  <div class="carpeta-cab">
+    <span class="ruta">⛔ {{ errores|length }} escaneo{{ 's' if errores|length > 1 }} sin leer</span>
+    <span class="destino">no se ha podido leer el PDF: vuelve a subirlo desde «Subir escaneo» (lo que ya estaba no se duplica)</span>
+  </div>
+  <div class="tabla-scroll" style="padding:.6rem .9rem"><table>
+  <tr><th>Fichero</th><th>Subido</th><th>Qué ha pasado</th></tr>
+  {% for l in errores %}<tr><td><strong>{{ l['fichero'] }}</strong></td><td>{{ l['recibido'][8:10] }}/{{ l['recibido'][5:7] }} {{ l['recibido'][11:16] }}</td><td class="mini">{{ l['estado'][7:] }}</td></tr>{% endfor %}
+  </table></div>
+</div>
+{% endif %}
+
 {% if incompletos %}
 <div class="carpeta dudas">
   <div class="carpeta-cab">
