@@ -35,7 +35,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.7.1'
+VERSION = '1.7.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -330,16 +330,17 @@ def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime, recogida
 
 
 def de_recogida(a):
-    """(origen, destino) de un albarán guardado si es una recogida; None si no."""
+    """(origen, destino) de un albarán guardado que no es una salida del cliente (recogida
+    para él, o albarán de otra empresa sin cliente: Soprema); None si es del cliente."""
     a = dict(a)
-    return (a.get('origen'), a.get('destino')) if a.get('recogida') else None
+    return (a.get('origen'), a.get('destino')) if a.get('recogida') or not a.get('cliente_id') else None
 
 
 def renombrar(con, aid: int) -> str | None:
     """Pone a un albarán ya guardado el nombre que le toca según sus datos de ahora (misma
     carpeta). Devuelve el nombre nuevo si ha cambiado."""
     a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
-    if not a or not a['numero'] or a['estado'] in ('entregado', 'descartado', 'revisar'):
+    if not a or a['estado'] in ('entregado', 'descartado', 'revisar') or not (a['numero'] or de_recogida(a)):
         return None
     cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
         if a['cliente_id'] else None
@@ -356,7 +357,8 @@ def renombrar(con, aid: int) -> str | None:
 def renombrar_recogidas(con) -> list[str]:
     """Aplica el nombre de recogida a las que ya estaban guardadas con su número."""
     return [f'{Path(a["ruta"]).name} → {n}' for a in con.execute(
-        "SELECT id, ruta FROM albaranes WHERE recogida AND estado NOT IN ('entregado','descartado')").fetchall()
+        "SELECT id, ruta FROM albaranes WHERE (recogida OR cliente_id IS NULL) "
+        "AND estado NOT IN ('entregado','descartado','revisar')").fetchall()
         if (n := renombrar(con, a['id']))]
 
 
@@ -457,6 +459,11 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                 cliente, recogida, regla = aprender.aplicar_regla(
                     con, {'emisor': g['emisor'], 'entrega_a': g.get('entrega_a'), 'origen': g.get('origen'),
                           'destino': g.get('destino')}, cliente, recogida)
+                fuera = recogida or not cliente  # no es salida del cliente: no lleva su número
+                if fuera and g['revisar'] and fecha_valida(g.get('fecha')) and g.get('destino'):
+                    # regla de Mario 05-11: se sube igual y se nombra fecha-recogida.entrega;
+                    # el número del proveedor no hace falta, así que no va a REVISAR por él
+                    g['revisar'] = False
                 previo = con.execute(
                     "SELECT * FROM albaranes WHERE numero=? AND cliente_id IS ? AND estado != 'descartado'",
                     (g['numero'], cliente['id'] if cliente else None)).fetchone() \
@@ -481,9 +488,11 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                 if g['revisar']:
                     carpeta = ARCHIVO / 'REVISAR'
                 carpeta.mkdir(parents=True, exist_ok=True)
-                if g['numero'] and not g['revisar']:
+                if fuera and not g['revisar']:
                     nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando,
-                                            (g.get('origen'), g.get('destino')) if recogida else None)
+                                            (g.get('origen'), g.get('destino')))
+                elif g['numero'] and not g['revisar']:
+                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando)
                 else:
                     nombre = f"{g['numero'] or 'sin-numero-lote%d-p%d' % (lote_id, g['paginas'][0]+1)}.pdf"
                 destino = destino_libre(carpeta, nombre)
@@ -505,7 +514,7 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                      estado, ahora.isoformat(timespec='seconds'),
                      f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None, int(bool(g.get('sellado'))),
                      g.get('peso'), g.get('pales'), g.get('destino'),
-                     g.get('origen') if recogida else None, int(recogida), g.get('entrega_a'),
+                     (g.get('origen') or '').strip().upper() or None, int(recogida), g.get('entrega_a'),
                      1 if regla else 0))
                 adjuntos = ', '.join(x for x in (
                     'justificantes' if g.get('justificantes') else '',
@@ -1899,6 +1908,26 @@ def repasar_todo() -> None:
                                                'fin': datetime.now().isoformat(timespec='seconds')}))
 
 
+def otra_empresa(con, a, info) -> str:
+    """Albarán de otra empresa (Soprema…), sin cliente: se completa con lo releído (emisor,
+    origen, destino, fecha), sale de REVISAR si ya se sabe fecha y destino, y toma el nombre
+    «fecha-recogida.entrega» (regla de Mario 05-11-2026)."""
+    emisor = a['emisor'] or (info.get('emisor') or '').strip().lower() or None
+    origen = (info.get('origen') or '').strip().upper() or a['origen']
+    destino = (info.get('destino') or '').strip().upper() or a['destino']
+    fecha = fecha_valida(info.get('fecha')) or fecha_valida(a['fecha_doc'])
+    numero = a['numero'] or (''.join(str(info.get('numero') or '').split()) or None)
+    con.execute('UPDATE albaranes SET emisor=?, origen=?, destino=?, numero=? WHERE id=?',
+                (emisor, origen, destino, numero, a['id']))
+    a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
+    if not (fecha and destino):
+        return f"· {Path(a['ruta']).name}: sin fecha o sin lugar de entrega, se queda para mirar"
+    if a2['estado'] == 'revisar':
+        con.execute("UPDATE albaranes SET estado='colocado' WHERE id=?", (a['id'],))
+        a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
+    return f"📄 {Path(a['ruta']).name} ({emisor or '¿?'}) · {recolocar(con, a2, fecha)}"
+
+
 def repasar_sin_cliente() -> None:
     """Relee solo los albaranes que no son de ningún cliente: los que en realidad son una
     recogida PARA el cliente (Fuji Oil → Delaviuda) pasan a ser suyos, con su fecha de recogida."""
@@ -1917,9 +1946,9 @@ def repasar_sin_cliente() -> None:
                                 '-l', '1', str(pdf), f'{tmp}/p'], check=True)
                 info = procesador._leer_derecha(Path(f'{tmp}/p.png'), pdf, 0, Path(tmp))[0]
             with _ESCRITURA, db() as con:
-                cliente, recogida = cliente_del_albaran(a['emisor'], info.get('entrega_a'), con)
+                cliente, recogida = cliente_del_albaran(a['emisor'] or info.get('emisor'), info.get('entrega_a'), con)
                 if not recogida:
-                    cambios.append(f"· {Path(a['ruta']).name}: sigue sin cliente (se entrega a {info.get('entrega_a') or '¿?'})")
+                    cambios.append(otra_empresa(con, a, info))
                     continue
                 origen = (info.get('origen') or '').strip().upper() or None
                 con.execute('UPDATE albaranes SET cliente_id=?, recogida=1, origen=?, destino=COALESCE(?, destino) '
