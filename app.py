@@ -35,7 +35,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.7.0'
+VERSION = '1.7.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -198,6 +198,11 @@ def init_db() -> None:
             for a, b in (('host', 'smtp_host'), ('puerto', 'smtp_puerto'),
                          ('usuario', 'smtp_usuario'), ('clave', 'smtp_clave'), ('de', 'smtp_de')):
                 cfg_set(con, b, str(v.get(a, '')))
+        # v1.7.1: las recogidas ya guardadas con su número pasan a «fecha-origen.destino»
+        try:
+            renombrar_recogidas(con)
+        except Exception:
+            pass
 
 
 def cfg_get(con: sqlite3.Connection, clave: str, defecto: str = '') -> str:
@@ -296,9 +301,22 @@ def cliente_del_albaran(emisor: str, entrega_a: str, con: sqlite3.Connection):
 PROHIBIDOS = str.maketrans({c: '-' for c in '/\\:*?"<>|'})
 
 
-def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime) -> str:
+def nombre_recogida(cuando: datetime, origen, destino, emisor, cliente) -> str:
+    """Albarán que no es una salida del cliente y no lleva su número de logística (recogida en
+    un proveedor para llevársela al cliente: Fuji Oil → Delaviuda). Regla de Mario 05-11-2026:
+    se sube igual, pero el fichero se llama «fecha-municipio de recogida.municipio de entrega»,
+    p. ej. «01-10-2026-SANTA PERPETUA DE LA MOGODA.SONSECA.pdf»."""
+    o = (origen or emisor or 'SIN ORIGEN').strip().upper()
+    d = (destino or (cliente['nombre'] if cliente else '') or 'SIN DESTINO').strip().upper()
+    return f'{cuando:%d-%m-%Y}-{o}.{d}'.translate(PROHIBIDOS) + '.pdf'
+
+
+def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime, recogida=None) -> str:
     """Nombre del PDF según el formato que pide cada cliente (ficha del cliente).
-    Variables: {numero} {cliente} {emisor} {fecha} (AAAAMMDD) {año} {mes} {dia}."""
+    Variables: {numero} {cliente} {emisor} {fecha} (AAAAMMDD) {año} {mes} {dia}.
+    `recogida` = (origen, destino) si el albarán es una recogida: manda nombre_recogida."""
+    if recogida:
+        return nombre_recogida(cuando, recogida[0], recogida[1], emisor, cliente)
     formato = (cliente['nombre_formato'] if cliente else '') or '{numero}'
     valores = {'numero': numero, 'cliente': cliente['nombre'] if cliente else '',
                'emisor': emisor or '', 'fecha': f'{cuando:%Y%m%d}', 'año': f'{cuando:%Y}',
@@ -309,6 +327,37 @@ def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime) -> str:
         nombre = numero  # formato mal escrito: nunca se queda sin nombre
     nombre = nombre.translate(PROHIBIDOS).strip(' .') or numero
     return nombre if nombre.lower().endswith('.pdf') else nombre + '.pdf'
+
+
+def de_recogida(a):
+    """(origen, destino) de un albarán guardado si es una recogida; None si no."""
+    a = dict(a)
+    return (a.get('origen'), a.get('destino')) if a.get('recogida') else None
+
+
+def renombrar(con, aid: int) -> str | None:
+    """Pone a un albarán ya guardado el nombre que le toca según sus datos de ahora (misma
+    carpeta). Devuelve el nombre nuevo si ha cambiado."""
+    a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
+    if not a or not a['numero'] or a['estado'] in ('entregado', 'descartado', 'revisar'):
+        return None
+    cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
+        if a['cliente_id'] else None
+    origen = DATA / a['ruta']
+    nombre = nombre_fichero(cliente, a['numero'], a['emisor'], fecha_de(a), de_recogida(a))
+    if origen.name == nombre or not origen.exists():
+        return None
+    destino = destino_libre(origen.parent, nombre, origen)
+    origen.rename(destino)
+    con.execute('UPDATE albaranes SET ruta=? WHERE id=?', (str(destino.relative_to(DATA)), aid))
+    return destino.name
+
+
+def renombrar_recogidas(con) -> list[str]:
+    """Aplica el nombre de recogida a las que ya estaban guardadas con su número."""
+    return [f'{Path(a["ruta"]).name} → {n}' for a in con.execute(
+        "SELECT id, ruta FROM albaranes WHERE recogida AND estado NOT IN ('entregado','descartado')").fetchall()
+        if (n := renombrar(con, a['id']))]
 
 
 def destino_libre(carpeta: Path, nombre: str, propio: Path | None = None) -> Path:
@@ -433,7 +482,8 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     carpeta = ARCHIVO / 'REVISAR'
                 carpeta.mkdir(parents=True, exist_ok=True)
                 if g['numero'] and not g['revisar']:
-                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando)
+                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando,
+                                            (g.get('origen'), g.get('destino')) if recogida else None)
                 else:
                     nombre = f"{g['numero'] or 'sin-numero-lote%d-p%d' % (lote_id, g['paginas'][0]+1)}.pdf"
                 destino = destino_libre(carpeta, nombre)
@@ -591,7 +641,7 @@ def recolocar(con, a, fecha: datetime) -> str:
         if a['cliente_id'] else None
     carpeta = carpeta_de(cliente, a['emisor'], fecha)
     carpeta.mkdir(parents=True, exist_ok=True)
-    destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha),
+    destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha, de_recogida(a)),
                             DATA / a['ruta'])
     (DATA / a['ruta']).rename(destino)
     con.execute('UPDATE albaranes SET fecha_doc=?, ruta=? WHERE id=?',
@@ -1319,16 +1369,20 @@ def portal_subidos(cid):
     return redirect(url_for('portal', cid=cid))
 
 
-def recolocar(con: sqlite3.Connection, a, numero: str, cliente, fecha_nueva) -> str | None:
+def recolocar_corregido(con: sqlite3.Connection, a, numero: str, cliente, fecha_nueva) -> str | None:
     """Vuelve a colocar un albarán con otro número, cliente o fecha. Devuelve el error o None."""
     cuando = fecha_nueva or fecha_de(a)
     carpeta = carpeta_de(cliente, a['emisor'], cuando)
     carpeta.mkdir(parents=True, exist_ok=True)
     origen = DATA / a['ruta']
-    nombre = nombre_fichero(cliente, numero, a['emisor'], cuando)
-    if (carpeta / nombre).exists() and carpeta / nombre != origen:
+    rec = de_recogida(a)
+    nombre = nombre_fichero(cliente, numero, a['emisor'], cuando, rec)
+    if rec:  # dos recogidas del mismo día y ruta: -2, -3… (el número no va en el nombre)
+        destino = destino_libre(carpeta, nombre, origen)
+    elif (carpeta / nombre).exists() and carpeta / nombre != origen:
         return f'Ya hay un albarán con el nombre {nombre} en {carpeta.relative_to(ARCHIVO)}.'
-    destino = carpeta / nombre
+    else:
+        destino = carpeta / nombre
     origen.rename(destino)
     con.execute("UPDATE albaranes SET numero=?, cliente_id=?, ruta=?, confianza='corregido', visto=1, "
                 "estado=CASE WHEN estado IN ('revisar','colocado') THEN 'colocado' ELSE estado END, "
@@ -1351,7 +1405,7 @@ def albaran_corregir(aid):
     with db() as con:
         a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
         cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone() if cid else None
-        error = recolocar(con, a, numero, cliente, fecha_nueva)
+        error = recolocar_corregido(con, a, numero, cliente, fecha_nueva)
     flash(error or f'Albarán {numero} colocado.')
     return redirect(url_for('revision'))
 
@@ -1391,7 +1445,7 @@ def albaran_explicar(aid):
                 if este['cliente'] else None
         numero = ''.join(str(este.get('numero') or a['numero'] or '').split())
         fecha_nueva = fecha_valida(este.get('fecha')) if este.get('fecha') else None
-        error = recolocar(con, a, numero, cliente, fecha_nueva)
+        error = recolocar_corregido(con, a, numero, cliente, fecha_nueva)
         if error:
             flash(error)
             return volver
@@ -1399,6 +1453,7 @@ def albaran_explicar(aid):
             if campo in este:
                 valor = int(bool(este[campo])) if campo == 'recogida' else este[campo]
                 con.execute(f'UPDATE albaranes SET {col}=? WHERE id=?', (valor, aid))
+        renombrar(con, aid)  # si ahora es (o deja de ser) recogida, cambia el nombre del fichero
         mensaje = f'✓ {r.get("entendido") or "Hecho."}'
         if siempre and r.get('regla'):
             rid = aprender.guardar_regla(con, texto, r.get('entendido') or '', r['regla'], clientes)
@@ -1424,9 +1479,10 @@ def aplicar_regla_a_lo_que_hay(con: sqlite3.Connection, rid: int, salvo: int) ->
             continue
         cliente = con.execute('SELECT * FROM clientes WHERE id=?', (hacer.get('cliente_id', a['cliente_id']),)).fetchone() \
             if hacer.get('cliente_id', a['cliente_id']) else None
-        if not recolocar(con, a, a['numero'], cliente, None):
+        if not recolocar_corregido(con, a, a['numero'], cliente, None):
             if 'recogida' in hacer:
                 con.execute('UPDATE albaranes SET recogida=? WHERE id=?', (int(hacer['recogida']), a['id']))
+                renombrar(con, a['id'])
             n += 1
     if n:
         con.execute('UPDATE reglas SET veces = veces + ? WHERE id=?', (n, rid))
