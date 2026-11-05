@@ -31,10 +31,11 @@ from flask import (Flask, flash, redirect, render_template, request,
 
 import aprender
 import exportar
+import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.6.2'
+VERSION = '1.7.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -136,6 +137,10 @@ def init_db() -> None:
             except sqlite3.OperationalError:
                 pass
         aprender.tabla(con)  # v1.6: lo aprendido al corregir hablando
+        # v1.7: listado de viajes exportado del programa del transportista (Kaleido)
+        con.execute('''CREATE TABLE IF NOT EXISTS listados (
+            id INTEGER PRIMARY KEY, fichero TEXT NOT NULL, subido TEXT NOT NULL,
+            datos TEXT NOT NULL DEFAULT '{}')''')
         con.execute('''CREATE TABLE IF NOT EXISTS facturas (
             id INTEGER PRIMARY KEY,
             fichero TEXT NOT NULL,
@@ -833,12 +838,65 @@ def mes_en_curso():
         checks = comprobar_cierre(con, mes, lista)
         facs = facturas_del_mes(con, mes)
         recogidas = recogidas_del_mes(con, mes)
+        programa = listado_del_mes(con, mes)
     resumen = {k: sum(1 for v in lista if v['estado'] == k) for k in ('verde', 'ambar', 'rojo')}
     return render_template('mes.html', mes=mes, meses=meses, viajes=lista, sueltos=sueltos,
-                           cierre=cierre, checks=checks, facs=facs, recogidas=recogidas,
+                           cierre=cierre, checks=checks, facs=facs, recogidas=recogidas, programa=programa,
                            resumen=resumen, faltan=sum(len(v['faltan']) for v in lista),
                            albaranes=sum(v['escaneados'] for v in lista) + len(sueltos) + len(recogidas),
                            pales=sum(v['pales'] for v in lista))
+
+
+def listado_del_mes(con: sqlite3.Connection, mes: str) -> dict | None:
+    """El último listado de viajes subido que trae viajes de este mes, cruzado con lo escaneado:
+    qué viajes no tienen ningún papel y a cuáles les faltan albaranes."""
+    for fila in con.execute('SELECT * FROM listados ORDER BY id DESC'):
+        d = json.loads(fila['datos'] or '{}')
+        viajes_l = d.get('viajes', [])
+        # si el listado trae viajes de otros clientes, solo cuentan los de los configurados
+        if any(v.get('cliente') for v in viajes_l):
+            nuestros = [v for v in viajes_l if v.get('cliente') and casar_cliente(v['cliente'], con)]
+            viajes_l = nuestros or viajes_l
+        fac = listado.como_factura(viajes_l, mes)
+        if not fac['viajes']:
+            continue
+        cruce = cruzar_factura(fac, con)
+        filas = [v for v in cruce['viajes'] if v.get('estado') not in ('suelta',)]
+        return {'fichero': fila['fichero'], 'subido': fila['subido'], 'columnas': d.get('columnas', {}),
+                'total': len(filas), 'id': fila['id'],
+                'sin_papeles': [v for v in filas if v['estado'] == 'sin albaranes'],
+                'faltan': [v for v in filas if v['estado'] == 'faltan escaneos'],
+                'ok': [v for v in filas if v['estado'] not in ('sin albaranes', 'faltan escaneos')]}
+    return None
+
+
+@app.route('/listado', methods=['POST'])
+@requiere_acceso
+def listado_subir():
+    """Sube el Excel (o CSV) de viajes exportado del programa del transportista."""
+    f = request.files.get('listado')
+    if not f or not f.filename:
+        flash('Elige el fichero exportado del programa.')
+        return redirect(url_for('mes_en_curso'))
+    datos = f.read()
+    try:
+        leido = listado.leer(f.filename, datos)
+    except Exception as e:
+        flash(f'No he podido leer «{f.filename}» ({e.__class__.__name__}). ¿Es un Excel o un CSV?')
+        return redirect(url_for('mes_en_curso'))
+    if not leido['viajes']:
+        flash(f'«{f.filename}»: {leido["aviso"]}')
+        return redirect(url_for('mes_en_curso'))
+    carpeta = ARCHIVO / '_listados'
+    carpeta.mkdir(parents=True, exist_ok=True)
+    (carpeta / f'{datetime.now():%Y%m%d-%H%M%S}-{Path(f.filename).name}').write_bytes(datos)
+    with db() as con:
+        con.execute('INSERT INTO listados (fichero, subido, datos) VALUES (?,?,?)',
+                    (f.filename, datetime.now().isoformat(timespec='seconds'), json.dumps(leido)))
+    meses_l = sorted({v['fecha'][:7] for v in leido['viajes']})
+    flash(f'✓ Listado leído: {len(leido["viajes"])} viajes ({", ".join(m[5:7] + "/" + m[:4] for m in meses_l)}). '
+          f'Columnas reconocidas: {", ".join(f"{k} = «{v}»" for k, v in leido["columnas"].items())}.')
+    return redirect(url_for('mes_en_curso', m=meses_l[-1]) + '#programa')
 
 
 def facturas_del_mes(con: sqlite3.Connection, mes: str) -> list:
@@ -1944,8 +2002,10 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
     for v in viajes:
         if v['albaranes'] or v.get('recogida'):
             continue
-        cand = [a for a in sueltos() if mismo_destino(v, a)]
-        if len(cand) == 1:
+        f = fecha_valida(v.get('fecha'))
+        cand = [a for a in sueltos() if mismo_destino(v, a) and (
+            not f or abs((fecha_valida(a['fecha_doc']) or f) - f).days <= 7)]
+        if len(cand) == 1:  # (con una semana de margen: el 893 es del 03-09 y su albarán del 09-09)
             tomar(v, [cand[0]['numero']])
     for v in viajes:
         vistos = v['albaranes']

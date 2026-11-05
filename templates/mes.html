@@ -79,6 +79,41 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   {% endif %}
 </section>
 
+<section class="cierre" id="programa">
+  <h2>Viajes según vuestro programa</h2>
+  <p class="mini" style="margin-top:0">Sin orden de carga la app no sabe qué viajes ha habido. Exportad de Kaleido el listado de viajes del mes
+  (Excel o CSV, como salga) y subidlo aquí: la app lo cruza con lo escaneado y dice qué viaje no tiene papeles o le faltan albaranes,
+  sin esperar a la factura. Se puede subir cuantas veces se quiera; vale el último.</p>
+  <form method="post" action="{{ url_for('listado_subir') }}" enctype="multipart/form-data" class="acciones" style="margin:.6rem 0 .9rem">
+    <label class="boton suave" style="cursor:pointer">📄 Elegir el Excel de viajes
+      <input type="file" name="listado" accept=".xlsx,.xls,.csv,.txt" required style="display:none" onchange="this.form.submit()">
+    </label>
+    {% if programa %}<span class="mini">Último: <strong>{{ programa.fichero }}</strong>, subido el {{ programa.subido[8:10] }}/{{ programa.subido[5:7] }} a las {{ programa.subido[11:16] }}</span>{% endif %}
+  </form>
+  {% if programa %}
+  <ul class="checks">
+    <li class="{{ 'falta' if programa.sin_papeles else 'ok' }}"><span class="ic">{{ '✕' if programa.sin_papeles else '✓' }}</span>
+      <div>{% if programa.sin_papeles %}{{ programa.sin_papeles|length }} de {{ programa.total }} viajes sin ningún papel escaneado{% else %}Los {{ programa.total }} viajes del listado tienen papeles escaneados{% endif %}</div></li>
+    <li class="{{ 'falta' if programa.faltan else 'ok' }}"><span class="ic">{{ '✕' if programa.faltan else '✓' }}</span>
+      <div>{% if programa.faltan %}{{ programa.faltan|length }} viaje{{ 's' if programa.faltan|length > 1 }} con albaranes que faltan{% else %}A ningún viaje le faltan albaranes{% endif %}</div></li>
+  </ul>
+  {% if programa.sin_papeles or programa.faltan %}
+  <div class="tabla-scroll"><table>
+    <tr><th>Viaje</th><th>Carga</th><th>Destino</th><th>Qué falta</th></tr>
+    {% for v in programa.sin_papeles %}
+    <tr class="fila-rojo"><td><strong>{{ v.viaje }}</strong></td><td>{{ v.fecha[8:10] }}/{{ v.fecha[5:7] }}</td><td>{{ v.destino }}</td>
+      <td><span class="semaforo rojo">sin ningún papel</span>{% if v.refs %}<div class="faltan">el listado cita: {{ v.refs|join(', ') }}</div>{% endif %}</td></tr>
+    {% endfor %}
+    {% for v in programa.faltan %}
+    <tr class="fila-rojo"><td><strong>{{ v.viaje }}</strong></td><td>{{ v.fecha[8:10] }}/{{ v.fecha[5:7] }}</td><td>{{ v.destino }}</td>
+      <td><span class="semaforo rojo">faltan {{ v.faltan|length }}</span><div class="faltan">{{ v.faltan|join(', ') }}</div></td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+  <p class="mini">Columnas reconocidas: {% for k, v in programa.columnas.items() %}{{ k }} = «{{ v }}»{{ ', ' if not loop.last }}{% endfor %}</p>
+  {% endif %}
+</section>
+
 <h2>Viajes</h2>
 <div class="tabla-scroll"><table>
 <tr><th>Carga</th><th>Orden de carga</th><th>Destino</th><th style="text-align:right">Albaranes</th><th style="text-align:right">Palés</th><th>Firmados</th><th>Estado</th></tr>
