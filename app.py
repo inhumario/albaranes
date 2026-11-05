@@ -35,7 +35,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.7.2'
+VERSION = '1.8.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -184,6 +184,8 @@ def init_db() -> None:
             parecido = next((n for n in pila if (o['rango_ini'] or '')[-4:] and n.endswith((o['rango_ini'] or '')[-4:])), '')
             citados = procesador.albaranes_citados(o['ref_texto'], 8, parecido or o['rango_ini'] or '', pila)
             con.execute('UPDATE anexos SET citados=? WHERE id=?', (json.dumps(citados), o['id']))
+        if not cfg_get(con, 'dav_clave'):  # clave de la carpeta de red de la Konica
+            cfg_set(con, 'dav_clave', secrets.token_urlsafe(9).replace('-', 'x').replace('_', 'y'))
         if not cfg_get(con, 'revisar_antes'):
             cfg_set(con, 'revisar_antes', '1')
         # contraseña inicial: de la variable ACCESO_CLAVE la primera vez
@@ -201,6 +203,7 @@ def init_db() -> None:
         # v1.7.1: las recogidas ya guardadas con su número pasan a «fecha-origen.destino»
         try:
             renombrar_recogidas(con)
+            ordenar_series(con)
         except Exception:
             pass
 
@@ -292,10 +295,13 @@ def cliente_del_albaran(emisor: str, entrega_a: str, con: sqlite3.Connection):
     transportista le lleva (Fuji Oil en Santa Perpetua → Delaviuda en Sonseca, viaje 1088):
     es del cliente y va con sus albaranes. Corrección de Mario 03-11-2026."""
     cliente = casar_cliente(emisor, con)
-    if cliente or not entrega_a:
-        return cliente, False
-    cliente = casar_cliente(entrega_a, con)
-    return cliente, bool(cliente)
+    destinatario = casar_cliente(entrega_a, con) if entrega_a else None
+    if destinatario and (not cliente or destinatario['id'] != cliente['id']):
+        # la mercancía se entrega a un cliente (Delaviuda) y el albarán es de otro: recogida
+        # para él, aunque el emisor también sea cliente (Mario 05-11: «lo tienes que ver en
+        # direcciones y nombres de entrega»)
+        return destinatario, True
+    return cliente, False
 
 
 PROHIBIDOS = str.maketrans({c: '-' for c in '/\\:*?"<>|'})
@@ -333,7 +339,7 @@ def de_recogida(a):
     """(origen, destino) de un albarán guardado que no es una salida del cliente (recogida
     para él, o albarán de otra empresa sin cliente: Soprema); None si es del cliente."""
     a = dict(a)
-    return (a.get('origen'), a.get('destino')) if a.get('recogida') or not a.get('cliente_id') else None
+    return (a.get('origen'), a.get('destino')) if a.get('recogida') else None
 
 
 def renombrar(con, aid: int) -> str | None:
@@ -352,6 +358,59 @@ def renombrar(con, aid: int) -> str | None:
     origen.rename(destino)
     con.execute('UPDATE albaranes SET ruta=? WHERE id=?', (str(destino.relative_to(DATA)), aid))
     return destino.name
+
+
+SERIES = ('100', '200')
+CLIENTES_CON_SERIE = {'soprema'}  # Mario 05-11: separar por 100 y 200 para la descarga
+
+
+def serie_de(con, a) -> str | None:
+    """Subcarpeta de serie para los albaranes de otra empresa (Soprema): los albaranes de
+    transporte que empiezan por 100 (Vallmoll) o 200 (Villasequilla) van separados para la
+    descarga (petición de Mario 05-11-2026). Los que no llevan esa serie (albaranes de entrega
+    26…, o sin número) van con la serie de los de su mismo origen."""
+    a = dict(a)
+    num = re.sub(r'\D', '', a.get('numero') or '')
+    if a.get('recogida'):
+        return None
+    if num[:3] in SERIES:
+        return f'serie-{num[:3]}'
+    if not a.get('origen') or not a.get('emisor'):
+        return None
+    votos = {}
+    for (n,) in con.execute("SELECT numero FROM albaranes WHERE cliente_id IS ? AND emisor=? AND origen=? "
+                            "AND estado != 'descartado' AND id != ?", (a['cliente_id'], a['emisor'], a['origen'], a['id'])):
+        n = re.sub(r'\D', '', n or '')
+        if n[:3] in SERIES:
+            votos[n[:3]] = votos.get(n[:3], 0) + 1
+    return f'serie-{max(votos, key=votos.get)}' if votos else None
+
+
+def ordenar_series(con) -> list[str]:
+    """Coloca los albaranes sin cliente en la subcarpeta de su serie (o la quita si no tiene)."""
+    cambios = []
+    ids = [c['id'] for c in con.execute('SELECT id, nombre FROM clientes')
+           if procesador.normaliza(c['nombre']) in CLIENTES_CON_SERIE]
+    if not ids:
+        return cambios
+    for a in con.execute(f"SELECT * FROM albaranes WHERE cliente_id IN ({','.join('?' * len(ids))}) "
+                         "AND NOT recogida AND estado NOT IN ('entregado','descartado','revisar')", ids).fetchall():
+        origen = DATA / a['ruta']
+        if not origen.exists():
+            continue
+        cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone()
+        carpeta = carpeta_de(cliente, a['emisor'], fecha_de(a))
+        serie = serie_de(con, a)
+        if serie:
+            carpeta = carpeta / serie
+        if origen.parent == carpeta:
+            continue
+        carpeta.mkdir(parents=True, exist_ok=True)
+        destino = destino_libre(carpeta, origen.name, origen)
+        origen.rename(destino)
+        con.execute('UPDATE albaranes SET ruta=? WHERE id=?', (str(destino.relative_to(DATA)), a['id']))
+        cambios.append(f'{origen.name} → {destino.parent.relative_to(ARCHIVO)}/')
+    return cambios
 
 
 def renombrar_recogidas(con) -> list[str]:
@@ -459,7 +518,9 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                 cliente, recogida, regla = aprender.aplicar_regla(
                     con, {'emisor': g['emisor'], 'entrega_a': g.get('entrega_a'), 'origen': g.get('origen'),
                           'destino': g.get('destino')}, cliente, recogida)
-                fuera = recogida or not cliente  # no es salida del cliente: no lleva su número
+                fuera = recogida  # recogida para Delaviuda: no lleva su número (Mario 05-11)
+                if fuera and not fecha_valida(g.get('fecha')) and fecha_valida(g.get('fecha_documento')):
+                    g['fecha'] = g['fecha_documento']  # sin casilla de carga: la del documento
                 if fuera and g['revisar'] and fecha_valida(g.get('fecha')) and g.get('destino'):
                     # regla de Mario 05-11: se sube igual y se nombra fecha-recogida.entrega;
                     # el número del proveedor no hace falta, así que no va a REVISAR por él
@@ -532,6 +593,7 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
             unir_anexos(con)
             unir_anexos_del_viaje(con, lote_id)
             fechas_desde_ordenes(con)
+            ordenar_series(con)
             con.execute('UPDATE lotes SET estado=?, descartados=? WHERE id=?',
                         ('procesado', ', '.join(descartados), lote_id))
     except Exception as e:  # el lote nunca se queda en 'procesando' en silencio
@@ -1463,6 +1525,7 @@ def albaran_explicar(aid):
                 valor = int(bool(este[campo])) if campo == 'recogida' else este[campo]
                 con.execute(f'UPDATE albaranes SET {col}=? WHERE id=?', (valor, aid))
         renombrar(con, aid)  # si ahora es (o deja de ser) recogida, cambia el nombre del fichero
+        ordenar_series(con)
         mensaje = f'✓ {r.get("entendido") or "Hecho."}'
         if siempre and r.get('regla'):
             rid = aprender.guardar_regla(con, texto, r.get('entendido') or '', r['regla'], clientes)
@@ -1807,7 +1870,10 @@ def ajustes():
             hacer = json.loads(r['hacer'] or '{}')
             reglas.append({**dict(r), 'cuando_l': cuando, 'cliente': nombres.get(hacer.get('cliente_id'), '')
                            if 'cliente_id' in hacer else None, 'recogida': hacer.get('recogida')})
-    return render_template('ajustes.html', reglas=reglas, repaso=repaso, smtp=smtp, buzon=buzon, hay_clave=hay_clave, version=VERSION,
+    dav = {'url': (os.environ.get('BASE_URL') or request.host_url).rstrip('/') + '/dav', 'usuario': DAV_USUARIO}
+    with db() as con:
+        dav.update(clave=cfg_get(con, 'dav_clave'), ultimo=cfg_get(con, 'dav_ultimo'))
+    return render_template('ajustes.html', dav=dav, reglas=reglas, repaso=repaso, smtp=smtp, buzon=buzon, hay_clave=hay_clave, version=VERSION,
                            revisar_antes=revisar_antes)
 
 
@@ -1908,6 +1974,37 @@ def repasar_todo() -> None:
                                                'fin': datetime.now().isoformat(timespec='seconds')}))
 
 
+def a_su_cliente(con, a, info, cliente) -> str:
+    """Albarán sin cliente releído: si es de un cliente (Soprema), pasa a él con su número
+    (releído, que manda) y el nombre de su ficha; si el número no se ve, a Revisión."""
+    if not cliente:
+        return f"· {Path(a['ruta']).name}: sigue sin cliente (emisor {info.get('emisor') or '¿?'})"
+    numero = ''.join(str(info.get('numero') or '').split()) or None
+    if info.get('confianza') == 'baja':
+        numero = None
+    emisor = (info.get('emisor') or '').strip().lower() or a['emisor']
+    origen = (info.get('origen') or '').strip().upper() or a['origen']
+    destino = (info.get('destino') or '').strip().upper() or a['destino']
+    fecha = fecha_valida(info.get('fecha')) or fecha_valida(a['fecha_doc']) or fecha_valida(info.get('fecha_documento'))
+    con.execute('UPDATE albaranes SET emisor=?, origen=?, destino=?, recogida=0, '
+                'fecha_doc=COALESCE(?, fecha_doc) WHERE id=?',
+                (emisor, origen, destino, f'{fecha:%Y-%m-%d}' if fecha else None, a['id']))
+    a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
+    if not numero:
+        carpeta = ARCHIVO / 'REVISAR'
+        carpeta.mkdir(parents=True, exist_ok=True)
+        destino_f = destino_libre(carpeta, f"sin-numero-{a['id']}.pdf", DATA / a['ruta'])
+        (DATA / a['ruta']).rename(destino_f)
+        con.execute("UPDATE albaranes SET cliente_id=?, numero=NULL, estado='revisar', ruta=?, "
+                    "entrega_nota='el número no se ve (tapado o ilegible): escríbelo' WHERE id=?",
+                    (cliente['id'], str(destino_f.relative_to(DATA)), a['id']))
+        return f"❓ {Path(a['ruta']).name}: de {cliente['nombre']}, pero el número no se ve → Revisión"
+    error = recolocar_corregido(con, a2, numero, cliente, fecha)
+    if error:
+        return f"· {Path(a['ruta']).name}: {error}"
+    return f"📄 {Path(a['ruta']).name} → {cliente['nombre']} · {numero}"
+
+
 def otra_empresa(con, a, info) -> str:
     """Albarán de otra empresa (Soprema…), sin cliente: se completa con lo releído (emisor,
     origen, destino, fecha), sale de REVISAR si ya se sabe fecha y destino, y toma el nombre
@@ -1915,8 +2012,8 @@ def otra_empresa(con, a, info) -> str:
     emisor = a['emisor'] or (info.get('emisor') or '').strip().lower() or None
     origen = (info.get('origen') or '').strip().upper() or a['origen']
     destino = (info.get('destino') or '').strip().upper() or a['destino']
-    fecha = fecha_valida(info.get('fecha')) or fecha_valida(a['fecha_doc'])
-    numero = a['numero'] or (''.join(str(info.get('numero') or '').split()) or None)
+    fecha = fecha_valida(info.get('fecha')) or fecha_valida(a['fecha_doc']) or fecha_valida(info.get('fecha_documento'))
+    numero = ''.join(str(info.get('numero') or '').split()) or None  # la relectura manda
     con.execute('UPDATE albaranes SET emisor=?, origen=?, destino=?, numero=? WHERE id=?',
                 (emisor, origen, destino, numero, a['id']))
     a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
@@ -1944,11 +2041,20 @@ def repasar_sin_cliente() -> None:
             with tempfile.TemporaryDirectory() as tmp:
                 subprocess.run(['pdftoppm', '-r', str(procesador.DPI), '-png', '-singlefile', '-f', '1',
                                 '-l', '1', str(pdf), f'{tmp}/p'], check=True)
-                info = procesador._leer_derecha(Path(f'{tmp}/p.png'), pdf, 0, Path(tmp))[0]
+                info, derecha = procesador._leer_derecha(Path(f'{tmp}/p.png'), pdf, 0, Path(tmp))
+                if derecha is not None and a['estado'] not in ('entregado',):
+                    # venía al revés: se guarda enderezada (como al subir)
+                    from pypdf import PdfReader, PdfWriter
+                    w = PdfWriter()
+                    for k, pg in enumerate(PdfReader(str(pdf)).pages):
+                        w.add_page(derecha if k == 0 else pg)
+                    with open(f'{tmp}/d.pdf', 'wb') as f:
+                        w.write(f)
+                    Path(f'{tmp}/d.pdf').replace(pdf)
             with _ESCRITURA, db() as con:
                 cliente, recogida = cliente_del_albaran(a['emisor'] or info.get('emisor'), info.get('entrega_a'), con)
                 if not recogida:
-                    cambios.append(otra_empresa(con, a, info))
+                    cambios.append(a_su_cliente(con, a, info, cliente))
                     continue
                 origen = (info.get('origen') or '').strip().upper() or None
                 con.execute('UPDATE albaranes SET cliente_id=?, recogida=1, origen=?, destino=COALESCE(?, destino) '
@@ -1958,7 +2064,8 @@ def repasar_sin_cliente() -> None:
                 a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
                 cambios.append(f"🚚 {Path(a['ruta']).name}: recogida en {origen or '¿?'} para {cliente['nombre']} "
                                f"({fecha:%d/%m/%Y}) · {recolocar(con, a2, fecha)}")
-        with db() as con:
+        with _ESCRITURA, db() as con:
+            cambios += [f'📁 {c}' for c in ordenar_series(con)]
             cfg_set(con, 'repaso', json.dumps({'estado': 'hecho', 'total': len(filas), 'cambios': cambios,
                                                'fin': datetime.now().isoformat(timespec='seconds')}))
     except Exception as e:
@@ -2344,6 +2451,78 @@ def vigilar_buzon() -> None:
                 leer_buzon()
         except Exception:
             pass  # el error queda en imap_estado; el hilo no se para nunca
+
+
+# ------------------------------------------------- carpeta de red para la Konica (WebDAV)
+# La bizhub escanea a un destino «WebDAV» (https://albaranes.inhumario.com/dav, usuario
+# konica + clave de Ajustes): cada PDF que deja ahí entra como si se hubiera subido en la web.
+# Petición de Mario 05-11-2026: «una carpeta en la Konica que vaya directamente al aplicativo».
+DAV_USUARIO = 'konica'
+
+
+def _dav_ok() -> bool:
+    auth = request.authorization
+    with db() as con:
+        clave = cfg_get(con, 'dav_clave')
+    return bool(clave and auth and auth.username == DAV_USUARIO
+                and secrets.compare_digest((auth.password or '').encode(), clave.encode()))
+
+
+def _dav_multistatus(ruta: str, carpeta: bool = True):
+    from flask import Response
+    ahora = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S GMT')
+    tipo = '<D:resourcetype><D:collection/></D:resourcetype>' if carpeta else '<D:resourcetype/>'
+    xml = ('<?xml version="1.0" encoding="utf-8"?><D:multistatus xmlns:D="DAV:"><D:response>'
+           f'<D:href>{ruta}</D:href><D:propstat><D:prop>{tipo}'
+           f'<D:getlastmodified>{ahora}</D:getlastmodified><D:displayname>albaranes</D:displayname>'
+           '</D:prop><D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>')
+    return Response(xml, status=207, content_type='application/xml; charset="utf-8"')
+
+
+@app.route('/dav', methods=['OPTIONS', 'PROPFIND', 'MKCOL', 'PUT', 'GET', 'HEAD', 'DELETE', 'LOCK', 'UNLOCK'])
+@app.route('/dav/', methods=['OPTIONS', 'PROPFIND', 'MKCOL', 'PUT', 'GET', 'HEAD', 'DELETE', 'LOCK', 'UNLOCK'])
+@app.route('/dav/<path:fichero>', methods=['OPTIONS', 'PROPFIND', 'MKCOL', 'PUT', 'GET', 'HEAD', 'DELETE', 'LOCK', 'UNLOCK'])
+def dav(fichero=''):
+    from flask import Response
+    if request.method == 'OPTIONS':
+        return Response('', 200, {'DAV': '1,2', 'MS-Author-Via': 'DAV',
+                                  'Allow': 'OPTIONS, PROPFIND, MKCOL, PUT, GET, HEAD, DELETE, LOCK, UNLOCK'})
+    if not _dav_ok():
+        return Response('Clave incorrecta', 401, {'WWW-Authenticate': 'Basic realm="Albaranes"'})
+    nombre = Path(fichero).name
+    if request.method == 'PROPFIND':
+        if not nombre or '.' not in nombre:
+            return _dav_multistatus(request.path)
+        return Response('', 404)  # nunca guarda nada a la vista: lo que llega se procesa
+    if request.method in ('MKCOL', 'DELETE', 'UNLOCK'):
+        return Response('', 201 if request.method == 'MKCOL' else 204)
+    if request.method == 'LOCK':
+        token = f'opaquelocktoken:{secrets.token_hex(16)}'
+        xml = ('<?xml version="1.0" encoding="utf-8"?><D:prop xmlns:D="DAV:"><D:lockdiscovery><D:activelock>'
+               '<D:locktype><D:write/></D:locktype><D:lockscope><D:exclusive/></D:lockscope><D:depth>0</D:depth>'
+               f'<D:timeout>Second-600</D:timeout><D:locktoken><D:href>{token}</D:href></D:locktoken>'
+               '</D:activelock></D:lockdiscovery></D:prop>')
+        return Response(xml, 200, {'Lock-Token': f'<{token}>'}, content_type='application/xml; charset="utf-8"')
+    if request.method in ('GET', 'HEAD'):
+        return Response('', 404 if nombre else 200)
+    # PUT: un escaneo nuevo
+    cuerpo = request.get_data()
+    if not cuerpo:
+        return Response('', 201)  # algunos equipos prueban la carpeta con un fichero vacío
+    if cuerpo[:5] != b'%PDF-':
+        return Response('Solo PDF: pon el tipo de archivo PDF en la Konica', 415)
+    ENTRADA.mkdir(parents=True, exist_ok=True)
+    limpio = re.sub(r'[^A-Za-z0-9._-]+', '_', nombre) or 'escaneo.pdf'
+    if not limpio.lower().endswith('.pdf'):
+        limpio += '.pdf'
+    destino = ENTRADA / f'{datetime.now():%Y%m%d-%H%M%S}-konica-{secrets.token_hex(3)}-{limpio}'
+    destino.write_bytes(cuerpo)
+    with db() as con:
+        lote_id = con.execute('INSERT INTO lotes (fichero, recibido) VALUES (?,?)',
+                              (f'{limpio} (desde la Konica)', datetime.now().isoformat(timespec='seconds'))).lastrowid
+        cfg_set(con, 'dav_ultimo', f'{datetime.now():%d/%m %H:%M} · {limpio}')
+    threading.Thread(target=procesar_lote, args=(lote_id, destino), daemon=True).start()
+    return Response('', 201)
 
 
 @app.route('/salud')

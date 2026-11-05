@@ -31,14 +31,15 @@ Extrae en JSON estricto, sin nada más:
   "tipo": "albaran si es un albarán / delivery note emitido por el proveedor que envía la mercancía; orden_carga si es una ORDEN DE CARGA (u otro documento de transporte que no es un albarán pero cita uno en un campo ALBARÁN); albaran_agrupado si es un albarán que en su casilla de número cita VARIOS albaranes (p.ej. '80467050/52-58'); justificante si es un documento de otra empresa que acompaña a la entrega pero no es el albarán del proveedor (confirmación de entrada o de entrega del destinatario, vale o recibo de palés, reserva de muelle, CMR, ticket de báscula...); otro si no es nada de eso",
   "albaranes_ref": "solo si tipo es orden_carga o albaran_agrupado: el texto del campo ALBARÁN / Nº ALBARÁN tal cual (p.ej. '80465556-5568'); si no, null",
   "emisor": "marca principal del membrete, en minúsculas, UNA palabra si es posible (p.ej. 'delaviuda', no 'delaviuda alimentación s.a.u.')",
-  "numero": "el número identificador del albarán tal cual aparece (junto a etiquetas como DELIVERY NOTE, ALBARÁN Nº, Nº DOCUMENTO...). Solo el número, sin espacios",
+  "numero": "el número identificador del albarán tal cual aparece (junto a etiquetas como DELIVERY NOTE, ALBARÁN Nº, Nº DOCUMENTO, o el Nº que va al lado del título 'Albarán de transporte' / 'Albarán de entrega'). Solo el número, sin espacios. NUNCA un código de cliente o de dirección de entrega (p.ej. 'C2000826' en la casilla 'Dirección de entrega'), ni el número de pedido, matrícula o referencia. Si el número está tapado por una pegatina o no se ve, null",
   "hoja": "valor del campo SHEET/HOJA si existe, si no null",
   "fecha": "SOLO la fecha de CARGA en formato AAAA-MM-DD: en un albarán, la de LOADING / Expedición / Fecha de carga / Fecha de salida / Fecha de recogida; en una orden de carga, su campo FECHA. NUNCA la de entrega (DELIVERY, Entrega) ni la del pedido (Nº PEDIDO/FECHA) ni sellos de recepción. Si la casilla de carga o expedición está vacía, null. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
+  "fecha_documento": "solo en albaranes: la fecha del propio documento, la que va junto a su número o en 'Fecha' / 'Referen' / 'Fecha de referencia', en AAAA-MM-DD; NUNCA la de entrega; null si no hay",
   "peso_bruto": "solo en albaranes: PESO BRUTO total del albarán en kg, como número con punto decimal (1.138,200 → 1138.2); null si no aparece",
   "pales": "solo en albaranes: número TOTAL de palés del albarán, como número. Por orden: (1) si hay una línea de PALETS CHEP / PALETS EUR / PALETS (código 10000), su cantidad en la columna CASES / CAJAS es el total; (2) si no, la casilla PALLETS / PALES / Nº PALETS del pie, o la suma de las líneas de palés si no hay total. La columna PALLET / PALETS de cada línea de mercancía NO es el total cuando hay línea de PALETS CHEP. null si no aparece",
   "destino": "solo en albaranes: población del domicilio de envío de la mercancía, en mayúsculas y sin código postal (p.ej. BARCELONA); null si no aparece",
   "entrega_a": "solo en albaranes: empresa a la que se ENTREGA la mercancía (Datos de entrega / Destinatario / Consignee / Ship to / Cliente), marca principal en minúsculas y UNA palabra (p.ej. 'delaviuda'); null si no aparece",
-  "origen": "solo en albaranes: población donde se RECOGE o CARGA la mercancía (Lugar de recogida / Lugar de carga / Almacén de expedición / Remitente), en mayúsculas y sin código postal (p.ej. SANTA PERPETUA DE LA MOGODA, VALLMOLL); si no aparece ninguno, la población del membrete del emisor; null si no hay ninguna",
+  "origen": "solo en albaranes: población donde se RECOGE o CARGA la mercancía (Lugar de recogida / Lugar de carga / Almacén de expedición / Remitente), en mayúsculas, sin código postal y sin abreviar (STA. → SANTA; p.ej. SANTA PERPETUA DE LA MOGODA, VALLMOLL); si no aparece ninguno, la población del membrete del emisor; null si no hay ninguna",
   "sellado": "true si la hoja lleva sello o firma de recepción del cliente (p.ej. 'CONFORME', fecha de llegada estampada), si no false",
   "es_continuacion": "true solo si la página claramente NO es la primera hoja de un albarán (no tiene cabecera con número propio)",
   "confianza": "alta|media|baja según lo legible que sea el número"
@@ -316,6 +317,14 @@ def _leer_derecha(png: Path, pdf: Path, i: int, tmp: Path):
         giro_total = (giro_total + info['giro']) % 360
         pdf_g, png_g, pagina = _enderezar(pdf, i, giro_total, tmp)
         info = _analizar_pagina(png_g, pdf_g, 0)
+    if not giro_total and not info.get('giro') and not info.get('numero') \
+            and tipo_de(info.get('tipo'), None) in ('albaran', 'otro'):
+        # no se ha leído nada útil y el modelo no ha visto que esté girada: se prueba boca abajo
+        # (pasó con un albarán de transporte de Soprema escaneado al revés, 05-11-2026)
+        pdf_g, png_g, pag_g = _enderezar(pdf, i, 180, tmp)
+        info_g = _analizar_pagina(png_g, pdf_g, 0)
+        if info_g.get('numero') and not info_g.get('giro'):
+            return {**info_g, 'girada': 180}, pag_g
     if info.get('giro'):  # no hay manera: se lee tal cual y va a revisar
         info['giro'] = 0
         info['tipo'] = tipo_de(info.get('tipo'), info.get('numero'))
@@ -405,7 +414,9 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
             principal, veces = emisores.most_common(1)[0]
             for x in infos:
                 e = normaliza(x.get('emisor') or '')
-                if x['tipo'] == 'albaran' and e and e != principal and emisores[e] < veces:
+                if x['tipo'] == 'albaran' and e and e != principal and emisores[e] < veces \
+                        and normaliza(x.get('entrega_a') or '') != principal:
+                    # (si se entrega al proveedor principal es una recogida para él: se queda)
                     x['tipo'], x['numero'] = 'justificante', None
         justif_sueltos = []  # justificantes antes del primer documento: van con el siguiente
 
@@ -453,6 +464,7 @@ def procesar_pdf(pdf: Path, avance=None) -> list[dict]:
                      'peso': _num(info.get('peso_bruto')), 'pales': _num(info.get('pales')),
                      'destino': (info.get('destino') or '').strip().upper() or None,
                      'fecha': info.get('fecha'),
+                     'fecha_documento': info.get('fecha_documento'),
                      # albarán de un proveedor del cliente que se recoge para él (Fuji Oil →
                      # Delaviuda en Sonseca): a quién se entrega y dónde se recoge
                      'entrega_a': (info.get('entrega_a') or '').strip() or None,

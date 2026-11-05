@@ -41,6 +41,17 @@ Lo ya entregado no se toca: solo se avisa.</p>
 </div>
 {% endif %}
 
+<h2>Escanear directo a la app — carpeta de la Konica</h2>
+<p class="mini" style="max-width:640px">En la Konica se da de alta un destino de tipo <strong>WebDAV</strong> con estos datos
+(«Albaranes» en la libreta de direcciones). Todo lo que se escanee a ese destino entra aquí solo, como si se subiera en «Subir escaneo».</p>
+<table style="max-width:560px"><tr><td>Servidor (host)</td><td><code>{{ dav.url.split('//')[1].split('/')[0] }}</code></td></tr>
+<tr><td>Ruta / carpeta</td><td><code>/dav</code></td></tr>
+<tr><td>Usuario</td><td><code>{{ dav.usuario }}</code></td></tr>
+<tr><td>Contraseña</td><td><code>{{ dav.clave }}</code></td></tr>
+<tr><td>SSL / puerto</td><td>Sí · 443</td></tr>
+<tr><td>Tipo de archivo</td><td>PDF (multipágina)</td></tr></table>
+{% if dav.ultimo %}<p class="mini"><strong>Último escaneo recibido:</strong> {{ dav.ultimo }}</p>{% endif %}
+
 <h2>Escanear directo a la app — buzón de entrada</h2>
 <p class="mini" style="max-width:640px">La Konica escanea a un correo (botón «Albaranes» en su libreta de direcciones) y la app
 recoge los PDF de ese buzón cada 2 minutos, sin pasar por el ordenador. Cada correo se marca como leído al recogerlo.
