@@ -20,6 +20,20 @@ Cada albarán va a la carpeta de un CLIENTE (la empresa a la que se le presentan
 Una RECOGIDA es un albarán de otra empresa (un proveedor del cliente) cuya mercancía el camión
 recoge en el ORIGEN y lleva al cliente: va con los albaranes del cliente.
 
+Lo que la app YA HACE SOLA, sin regla ni nada que hacer a mano:
+- Nombre del PDF: cada albarán del cliente se llama por su número (formato de la ficha del cliente).
+  Una RECOGIDA (albarán de otra empresa que se entrega al cliente, como Fuji Oil → Delaviuda) se
+  llama sola «DD-MM-AAAA-ORIGEN.DESTINO.pdf» (fecha de recogida, población de recogida y de entrega),
+  y se vuelve a nombrar sola en cuanto cambian su fecha, origen o destino o se marca como recogida.
+  Un albarán del cliente con el número tapado o ilegible se llama «sin-numero-DD-MM-AAAA-DESTINO.pdf».
+- Las hojas al revés se enderezan; cada albarán va a la carpeta cliente/año/mes de su fecha de carga;
+  los de Soprema van separados en serie-100 y serie-200.
+Así que si la persona pide un nombre, formato o colocación que la app ya hace sola, NO es una duda:
+en "entendido" díselo en llano («Eso ya lo hace sola: …»), pon en "este" solo los datos que haya que
+cambiar para que salga bien (p. ej. "recogida": true, "origen", "destino", "fecha") y, si el alcance
+es «siempre», crea la regla que marque los parecidos (mismo emisor) como recogida de ese cliente.
+NUNCA le pidas a la persona que renombre, mueva o haga nada a mano: lo hace la app.
+
 Albarán que está mirando la persona:
 {albaran}
 
@@ -49,6 +63,13 @@ para los albaranes PARECIDOS (lo normal: el mismo emisor), nunca números, fecha
 
 
 def tabla(con: sqlite3.Connection) -> None:
+    con.execute('''CREATE TABLE IF NOT EXISTS correcciones (
+        id INTEGER PRIMARY KEY,
+        albaran_id INTEGER,
+        texto TEXT NOT NULL,          -- lo que escribió la persona en «Corregir»
+        alcance TEXT NOT NULL,        -- solo / siempre
+        respuesta TEXT NOT NULL,      -- lo que entendió o preguntó la app (JSON)
+        creado TEXT NOT NULL)''')
     con.execute('''CREATE TABLE IF NOT EXISTS reglas (
         id INTEGER PRIMARY KEY,
         texto TEXT NOT NULL,          -- lo que escribió la persona
@@ -84,9 +105,18 @@ def interpretar(a: dict, clientes: list[str], texto: str, siempre: bool, context
                                                   messages=[{'role': 'user', 'content': prompt}])
     salida = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
     try:
-        return _json(salida)
+        r = _json(salida)
     except json.JSONDecodeError:
-        return {'duda': 'No he entendido bien lo que hay que hacer. ¿Puedes contarlo de otra forma?'}
+        r = {'duda': 'No he entendido bien lo que hay que hacer. ¿Puedes contarlo de otra forma?'}
+    if r.get('duda') and a.get('recogida') and re.search(r'nombr|llam|renombr|fecha|ruta|origen|destino|recogid',
+                                                         texto, re.I):
+        # pide cómo nombrar una recogida: eso ya lo hace la app sola (no se le devuelve el trabajo)
+        r = {'entendido': 'Eso ya lo hace la app sola: las recogidas se nombran «fecha-origen.destino» '
+                          'y se renombran solas si cambia algún dato.',
+             'este': {'recogida': True}, 'duda': None,
+             'regla': {'cuando': {'emisor': a.get('emisor')},
+                       'hacer': {'cliente': a.get('cliente'), 'recogida': True}} if siempre and a.get('emisor') else None}
+    return r
 
 
 def _casa(valor, patron) -> bool:

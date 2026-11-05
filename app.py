@@ -36,7 +36,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.8.5'
+VERSION = '1.8.6'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -1529,6 +1529,10 @@ def albaran_explicar(aid):
         contexto = ' '.join(f"{c['titulo']}: {c['texto']}" for c in por_que_mirar(a)) \
             or ('Está en Revisión porque el número no se ha podido asegurar.' if a['estado'] == 'revisar' else '')
         r = aprender.interpretar(dict(a), list(clientes), texto, siempre, contexto)
+        with db() as con:  # queda apuntado qué se escribió y qué contestó la app
+            con.execute('INSERT INTO correcciones (albaran_id, texto, alcance, respuesta, creado) VALUES (?,?,?,?,?)',
+                        (aid, texto, 'siempre' if siempre else 'solo', json.dumps(r, ensure_ascii=False),
+                         datetime.now().isoformat(timespec='seconds')))
     except Exception as e:  # sin conexión con el modelo: que se vea, sin tocar nada
         flash(f'No he podido consultarlo ahora mismo ({e.__class__.__name__}). Prueba otra vez en un momento.')
         return volver
@@ -1564,7 +1568,7 @@ def albaran_explicar(aid):
                 otros = aplicar_regla_a_lo_que_hay(con, rid, aid)
                 mensaje += ' A partir de ahora se hará siempre así' + (
                     f' (y ya lo he aplicado a {otros} albarán(es) parecidos que había).' if otros else '.')
-        elif siempre:
+        elif siempre and 'ya lo hace' not in mensaje:
             mensaje += ' (Esto es propio de este albarán: no hay nada que repetir en los demás.)'
         con.execute('UPDATE albaranes SET visto=1 WHERE id=?', (aid,))
     flash(mensaje)
