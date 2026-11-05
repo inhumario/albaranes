@@ -36,7 +36,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.8.4'
+VERSION = '1.8.5'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -1303,7 +1303,7 @@ def revision():
     with db() as con:  # viajes con albaranes que su orden de carga cita y no están
         incompletos = [v for v in viajes(con) if v['faltan']]
         errores = lotes_con_error(con)
-    return render_template('revision.html', mirar=mirar, incompletos=incompletos, errores=errores, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
+    return render_template('revision.html', aviso=session.pop('aviso', None), mirar=mirar, incompletos=incompletos, errores=errores, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
                            con_repetidos=con_repetidos,
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
                            n_colocados=sum(len(g['albaranes']) for g in grupos.values()) + len(mirar),
@@ -1526,12 +1526,16 @@ def albaran_explicar(aid):
     if not a:
         return volver
     try:
-        r = aprender.interpretar(dict(a), list(clientes), texto, siempre)
+        contexto = ' '.join(f"{c['titulo']}: {c['texto']}" for c in por_que_mirar(a)) \
+            or ('Está en Revisión porque el número no se ha podido asegurar.' if a['estado'] == 'revisar' else '')
+        r = aprender.interpretar(dict(a), list(clientes), texto, siempre, contexto)
     except Exception as e:  # sin conexión con el modelo: que se vea, sin tocar nada
         flash(f'No he podido consultarlo ahora mismo ({e.__class__.__name__}). Prueba otra vez en un momento.')
         return volver
     if r.get('duda'):
-        flash(f'🤔 {r["duda"]}')
+        # la pregunta se enseña junto al albarán (arriba de la página no se veía y parecía
+        # que «Corregir» no hacía nada: queja de Mario 05-11)
+        session['aviso'] = {'aid': aid, 'texto': f'🤔 {r["duda"]}', 'duda': True}
         return volver
     este = r.get('este') or {}
     with db() as con:
@@ -1564,7 +1568,7 @@ def albaran_explicar(aid):
             mensaje += ' (Esto es propio de este albarán: no hay nada que repetir en los demás.)'
         con.execute('UPDATE albaranes SET visto=1 WHERE id=?', (aid,))
     flash(mensaje)
-    return volver
+    return redirect((request.referrer or url_for('revision')).split('#')[0])  # ya no está en la lista
 
 
 def aplicar_regla_a_lo_que_hay(con: sqlite3.Connection, rid: int, salvo: int) -> int:

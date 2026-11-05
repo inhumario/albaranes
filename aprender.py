@@ -23,6 +23,9 @@ recoge en el ORIGEN y lleva al cliente: va con los albaranes del cliente.
 Albarán que está mirando la persona:
 {albaran}
 
+Por qué la app se lo está enseñando (lo que la persona tiene delante en la pantalla):
+{contexto}
+
 Clientes configurados en la app: {clientes}
 
 La persona escribe esto sobre el albarán:
@@ -37,6 +40,10 @@ Devuelve SOLO un JSON, sin nada más:
   "regla": null o {{"cuando": {{solo las condiciones que identifican los albaranes parecidos, de entre "emisor", "entrega_a", "origen", "destino", con el valor tal cual o abreviado}}, "hacer": {{de entre "cliente" (nombre exacto de la lista) y "recogida" (true/false)}}}},
   "duda": null o "la pregunta, si no se entiende qué quiere o pide algo que la app no puede hacer"
 }}
+Si la persona da por bueno lo que hay («vale», «ok», «está bien», «la buena es…», «la segunda», «la última»…),
+"este" es {{}} y "duda" es null: no hay nada que cambiar. Si escribe solo un número, es el número del albarán.
+Pregunta ("duda") SOLO si de verdad no se puede saber qué quiere; ante la duda razonable, entiende lo más probable
+según lo que tiene delante en la pantalla.
 Si el alcance es «solo este albarán», "regla" es null. Si es «siempre», la regla tiene que valer
 para los albaranes PARECIDOS (lo normal: el mismo emisor), nunca números, fechas ni palés concretos."""
 
@@ -62,10 +69,15 @@ def _json(texto: str) -> dict:
     return json.loads(m.group(0)) if m else {}
 
 
-def interpretar(a: dict, clientes: list[str], texto: str, siempre: bool) -> dict:
+def interpretar(a: dict, clientes: list[str], texto: str, siempre: bool, contexto: str = '') -> dict:
+    if re.fullmatch(r'\s*(n[ºo°.]?\s*)?[A-Za-z]?\d[\d\s.-]{3,}\s*', texto or '', re.I) and not siempre:
+        # un número suelto: es el número del albarán (no hace falta preguntar al modelo)
+        n = re.sub(r'^\s*n[ºo°.]?\s*', '', texto, flags=re.I)
+        n = re.sub(r'[\s.-]', '', n)
+        return {'entendido': f'Le pongo el número {n}.', 'este': {'numero': n}, 'regla': None, 'duda': None}
     datos = {k: a.get(k) for k in ('numero', 'emisor', 'entrega_a', 'origen', 'destino', 'fecha_doc',
                                     'pales', 'peso_kg', 'recogida', 'cliente')}
-    prompt = PROMPT.format(albaran=json.dumps(datos, ensure_ascii=False), clientes=', '.join(clientes) or '(ninguno)',
+    prompt = PROMPT.format(albaran=json.dumps(datos, ensure_ascii=False), contexto=contexto or '(nada especial)', clientes=', '.join(clientes) or '(ninguno)',
                            texto=texto.strip(), alcance='SIEMPRE que pase esto' if siempre else 'solo este albarán')
     with procesador._LECTURAS:
         resp = procesador._api().messages.create(model=MODELO, max_tokens=2000,

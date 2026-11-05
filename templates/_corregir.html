@@ -1,5 +1,7 @@
 {# Corregir un albarán: contándolo (la app lo entiende y puede aprenderlo) o a mano #}
-<details{{ ' open' if abierto }}>
+{% set mi_aviso = aviso if aviso and aviso.aid == a['id'] else None %}
+{% if mi_aviso %}<div class="aviso" style="margin:.4rem 0;border-left:4px solid #E0A800;padding:.5rem .7rem;background:#FFF8E1">{{ mi_aviso.texto }}<br><span class="mini">Cuéntamelo de otra forma aquí abajo, o usa «cambiar a mano».</span></div>{% endif %}
+<details{{ ' open' if abierto or mi_aviso }}>
   <summary>Corregir</summary>
   <form method="post" action="{{ url_for('albaran_explicar', aid=a['id']) }}" class="explicar">
     <textarea name="texto" rows="3" placeholder="Cuéntame qué pasa con este albarán. Ej.: «es una recogida en Fuji Oil para Delaviuda» o «este no es de Delaviuda, es de otro cliente»" required></textarea>
