@@ -36,7 +36,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.8.2'
+VERSION = '1.8.3'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -1478,6 +1478,8 @@ def albaran_corregir(aid):
         a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
         cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone() if cid else None
         error = recolocar_corregido(con, a, numero, cliente, fecha_nueva)
+        if not error:
+            ordenar_series(con)
     flash(error or f'Albarán {numero} colocado.')
     return redirect(url_for('revision'))
 
