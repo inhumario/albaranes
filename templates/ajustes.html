@@ -89,6 +89,26 @@ Solo se cogen PDF; si pones remitentes, solo los suyos.</p>
   <p><button class="boton suave">Probar envío</button></p>
 </form>
 
+<h2 id="aprendido">Lo aprendido</h2>
+<p class="mini">Lo que se ha contado en «Corregir» con «Hacer siempre esto». Se aplica solo a cada albarán nuevo
+que se parezca; si una regla ya no vale, olvídala.</p>
+{% if reglas %}
+<div class="tabla-scroll"><table>
+  <tr><th>Cuando el albarán…</th><th>Se hace</th><th>Lo que se dijo</th><th>Veces</th><th></th></tr>
+  {% for r in reglas %}
+  <tr>
+    <td>{% for k, v in r['cuando_l'].items() %}{{ {'emisor': 'lo emite', 'entrega_a': 'se entrega a', 'origen': 'se recoge en', 'destino': 'va a'}[k] }} <strong>{{ v }}</strong>{{ '<br>'|safe if not loop.last }}{% endfor %}</td>
+    <td>{{ r['entendido'] }}</td>
+    <td class="mini">«{{ r['texto'] }}»<br>{{ r['creado'][8:10] }}/{{ r['creado'][5:7] }}/{{ r['creado'][:4] }}</td>
+    <td>{{ r['veces'] }}</td>
+    <td><form method="post" action="{{ url_for('regla_olvidar', rid=r['id']) }}" onsubmit="return confirm('¿Olvidar esta regla?')"><button class="boton suave">Olvidar</button></form></td>
+  </tr>
+  {% endfor %}
+</table></div>
+{% else %}
+<p class="mini">Todavía no se ha aprendido nada.</p>
+{% endif %}
+
 <h2>Acceso</h2>
 <form method="post" style="max-width:560px">
   <input type="hidden" name="accion" value="clave">

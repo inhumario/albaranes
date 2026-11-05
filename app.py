@@ -29,11 +29,12 @@ from pathlib import Path
 from flask import (Flask, flash, redirect, render_template, request,
                    send_file, session, url_for)
 
+import aprender
 import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.5.0'
+VERSION = '1.6.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -134,6 +135,7 @@ def init_db() -> None:
                 con.execute(f'ALTER TABLE albaranes ADD COLUMN {col}')
             except sqlite3.OperationalError:
                 pass
+        aprender.tabla(con)  # v1.6: lo aprendido al corregir hablando
         con.execute('''CREATE TABLE IF NOT EXISTS facturas (
             id INTEGER PRIMARY KEY,
             fichero TEXT NOT NULL,
@@ -398,6 +400,9 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     alta_anexo(con, lote_id, g, destino, ahora)
                     continue
                 cliente, recogida = cliente_del_albaran(g['emisor'], g.get('entrega_a'), con)
+                cliente, recogida, regla = aprender.aplicar_regla(
+                    con, {'emisor': g['emisor'], 'entrega_a': g.get('entrega_a'), 'origen': g.get('origen'),
+                          'destino': g.get('destino')}, cliente, recogida)
                 previo = con.execute(
                     "SELECT * FROM albaranes WHERE numero=? AND cliente_id IS ? AND estado != 'descartado'",
                     (g['numero'], cliente['id'] if cliente else None)).fetchone() \
@@ -439,13 +444,14 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                 cur = con.execute(
                     'INSERT INTO albaranes (lote_id, cliente_id, numero, emisor, paginas,'
                     ' confianza, ruta, estado, creado, fecha_doc, sellado, peso_kg, pales, destino,'
-                    ' origen, recogida) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                    ' origen, recogida, entrega_a, visto) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (lote_id, cliente['id'] if cliente else None, g['numero'], g['emisor'],
                      len(g['paginas']), g['confianza'], str(destino.relative_to(DATA)),
                      estado, ahora.isoformat(timespec='seconds'),
                      f'{fecha_doc:%Y-%m-%d}' if fecha_doc else None, int(bool(g.get('sellado'))),
                      g.get('peso'), g.get('pales'), g.get('destino'),
-                     g.get('origen') if recogida else None, int(recogida)))
+                     g.get('origen') if recogida else None, int(recogida), g.get('entrega_a'),
+                     1 if regla else 0))
                 adjuntos = ', '.join(x for x in (
                     'justificantes' if g.get('justificantes') else '',
                     'enderezado' if g.get('girada') else '',
@@ -1087,13 +1093,23 @@ def revision():
                                         'albaranes': []})
         g['albaranes'].append(a)
     dudosos = [a for a in filas if a['estado'] == 'revisar']
+    # lo bien colocado va plegado aparte; arriba solo lo raro que la app ha resuelto sola y conviene
+    # mirar una vez (recogidas, dos versiones, sin fecha). Lo corregido o aprendido ya no se pide.
+    def para_mirar(a):
+        return not a['visto'] and (a['recogida'] or 'otra versión' in (a['adjuntos'] or '')
+                                   or not a['fecha_doc'])
+    mirar = [a for g in grupos.values() for a in g['albaranes'] if para_mirar(a)]
+    for g in grupos.values():
+        g['albaranes'] = [a for a in g['albaranes'] if not para_mirar(a)]
+    grupos = {k: g for k, g in grupos.items() if g['albaranes']}
     with db() as con:  # viajes con albaranes que su orden de carga cita y no están
         incompletos = [v for v in viajes(con) if v['faltan']]
         errores = lotes_con_error(con)
-    return render_template('revision.html', incompletos=incompletos, errores=errores, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
+    return render_template('revision.html', mirar=mirar, incompletos=incompletos, errores=errores, en_curso=en_curso, grupos=grupos, ordenes=ordenes,
                            con_repetidos=con_repetidos,
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
-                           n_colocados=sum(len(g['albaranes']) for g in grupos.values()))
+                           n_colocados=sum(len(g['albaranes']) for g in grupos.values()) + len(mirar),
+                           n_bien=sum(len(g['albaranes']) for g in grupos.values()))
 
 
 def destino_texto(a) -> str:
@@ -1191,6 +1207,25 @@ def portal_subidos(cid):
     return redirect(url_for('portal', cid=cid))
 
 
+def recolocar(con: sqlite3.Connection, a, numero: str, cliente, fecha_nueva) -> str | None:
+    """Vuelve a colocar un albarán con otro número, cliente o fecha. Devuelve el error o None."""
+    cuando = fecha_nueva or fecha_de(a)
+    carpeta = carpeta_de(cliente, a['emisor'], cuando)
+    carpeta.mkdir(parents=True, exist_ok=True)
+    origen = DATA / a['ruta']
+    nombre = nombre_fichero(cliente, numero, a['emisor'], cuando)
+    if (carpeta / nombre).exists() and carpeta / nombre != origen:
+        return f'Ya hay un albarán con el nombre {nombre} en {carpeta.relative_to(ARCHIVO)}.'
+    destino = carpeta / nombre
+    origen.rename(destino)
+    con.execute("UPDATE albaranes SET numero=?, cliente_id=?, ruta=?, confianza='corregido', visto=1, "
+                "estado=CASE WHEN estado IN ('revisar','colocado') THEN 'colocado' ELSE estado END, "
+                "entrega_nota='', fecha_doc=? WHERE id=?",
+                (numero, cliente['id'] if cliente else None, str(destino.relative_to(DATA)),
+                 f'{fecha_nueva:%Y-%m-%d}' if fecha_nueva else a['fecha_doc'], a['id']))
+    return None
+
+
 @app.route('/albaran/<int:aid>/corregir', methods=['POST'])
 @requiere_acceso
 def albaran_corregir(aid):
@@ -1204,22 +1239,95 @@ def albaran_corregir(aid):
     with db() as con:
         a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
         cliente = con.execute('SELECT * FROM clientes WHERE id=?', (cid,)).fetchone() if cid else None
-        cuando = fecha_nueva or fecha_de(a)
-        carpeta = carpeta_de(cliente, a['emisor'], cuando)
-        carpeta.mkdir(parents=True, exist_ok=True)
-        origen = DATA / a['ruta']
-        nombre = nombre_fichero(cliente, numero, a['emisor'], cuando)
-        if (carpeta / nombre).exists() and carpeta / nombre != origen:
-            flash(f'Ya hay un albarán con el nombre {nombre} en {carpeta.relative_to(ARCHIVO)}.')
-            return redirect(url_for('revision'))
-        destino = carpeta / nombre
-        origen.rename(destino)
-        con.execute("UPDATE albaranes SET numero=?, cliente_id=?, ruta=?, confianza='corregido', "
-                    "estado='colocado', entrega_nota='', fecha_doc=? WHERE id=?",
-                    (numero, cliente['id'] if cliente else None, str(destino.relative_to(DATA)),
-                     f'{fecha_nueva:%Y-%m-%d}' if fecha_nueva else a['fecha_doc'], aid))
-    flash(f'Albarán {numero} colocado.')
+        error = recolocar(con, a, numero, cliente, fecha_nueva)
+    flash(error or f'Albarán {numero} colocado.')
     return redirect(url_for('revision'))
+
+
+@app.route('/albaran/<int:aid>/explicar', methods=['POST'])
+@requiere_acceso
+def albaran_explicar(aid):
+    """Corregir hablando: se cuenta qué pasa, la app lo entiende y lo aplica a este albarán y,
+    si se marca «siempre», a los parecidos que ya están y a los que vengan."""
+    texto = request.form.get('texto', '').strip()
+    siempre = request.form.get('alcance') == 'siempre'
+    volver = redirect((request.referrer or url_for('revision')).split('#')[0] + f'#a{aid}')
+    if not texto:
+        flash('Cuenta qué pasa con el albarán.')
+        return volver
+    with db() as con:
+        a = con.execute('SELECT a.*, c.nombre AS cliente FROM albaranes a LEFT JOIN clientes c '
+                        'ON c.id=a.cliente_id WHERE a.id=?', (aid,)).fetchone()
+        clientes = {r['nombre']: r['id'] for r in con.execute('SELECT id, nombre FROM clientes')}
+    if not a:
+        return volver
+    try:
+        r = aprender.interpretar(dict(a), list(clientes), texto, siempre)
+    except Exception as e:  # sin conexión con el modelo: que se vea, sin tocar nada
+        flash(f'No he podido consultarlo ahora mismo ({e.__class__.__name__}). Prueba otra vez en un momento.')
+        return volver
+    if r.get('duda'):
+        flash(f'🤔 {r["duda"]}')
+        return volver
+    este = r.get('este') or {}
+    with db() as con:
+        a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
+        cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
+            if a['cliente_id'] else None
+        if 'cliente' in este:
+            cliente = con.execute('SELECT * FROM clientes WHERE id=?', (clientes.get(este['cliente']),)).fetchone() \
+                if este['cliente'] else None
+        numero = ''.join(str(este.get('numero') or a['numero'] or '').split())
+        fecha_nueva = fecha_valida(este.get('fecha')) if este.get('fecha') else None
+        error = recolocar(con, a, numero, cliente, fecha_nueva)
+        if error:
+            flash(error)
+            return volver
+        for campo, col in (('recogida', 'recogida'), ('origen', 'origen'), ('destino', 'destino'), ('pales', 'pales')):
+            if campo in este:
+                valor = int(bool(este[campo])) if campo == 'recogida' else este[campo]
+                con.execute(f'UPDATE albaranes SET {col}=? WHERE id=?', (valor, aid))
+        mensaje = f'✓ {r.get("entendido") or "Hecho."}'
+        if siempre and r.get('regla'):
+            rid = aprender.guardar_regla(con, texto, r.get('entendido') or '', r['regla'], clientes)
+            if rid:
+                otros = aplicar_regla_a_lo_que_hay(con, rid, aid)
+                mensaje += ' A partir de ahora se hará siempre así' + (
+                    f' (y ya lo he aplicado a {otros} albarán(es) parecidos que había).' if otros else '.')
+        elif siempre:
+            mensaje += ' (Esto es propio de este albarán: no hay nada que repetir en los demás.)'
+        con.execute('UPDATE albaranes SET visto=1 WHERE id=?', (aid,))
+    flash(mensaje)
+    return volver
+
+
+def aplicar_regla_a_lo_que_hay(con: sqlite3.Connection, rid: int, salvo: int) -> int:
+    """Una regla nueva también vale para lo ya subido que no se ha entregado."""
+    regla = con.execute('SELECT * FROM reglas WHERE id=?', (rid,)).fetchone()
+    hacer = json.loads(regla['hacer'])
+    n = 0
+    for a in con.execute("SELECT * FROM albaranes WHERE id != ? AND estado IN ('colocado','revisar') "
+                         "AND numero IS NOT NULL", (salvo,)).fetchall():
+        if aprender.regla_para(con, dict(a)) is None or aprender.regla_para(con, dict(a))['id'] != rid:
+            continue
+        cliente = con.execute('SELECT * FROM clientes WHERE id=?', (hacer.get('cliente_id', a['cliente_id']),)).fetchone() \
+            if hacer.get('cliente_id', a['cliente_id']) else None
+        if not recolocar(con, a, a['numero'], cliente, None):
+            if 'recogida' in hacer:
+                con.execute('UPDATE albaranes SET recogida=? WHERE id=?', (int(hacer['recogida']), a['id']))
+            n += 1
+    if n:
+        con.execute('UPDATE reglas SET veces = veces + ? WHERE id=?', (n, rid))
+    return n
+
+
+@app.route('/regla/<int:rid>/olvidar', methods=['POST'])
+@requiere_acceso
+def regla_olvidar(rid):
+    with db() as con:
+        con.execute('DELETE FROM reglas WHERE id=?', (rid,))
+    flash('Regla olvidada: lo que venga a partir de ahora ya no la sigue (lo ya colocado no se mueve).')
+    return redirect(url_for('ajustes') + '#aprendido')
 
 
 @app.route('/anexo/<int:xid>/unir', methods=['POST'])
@@ -1515,7 +1623,14 @@ def ajustes():
         hay_clave = bool(cfg_get(con, 'clave_hash'))
         revisar_antes = cfg_get(con, 'revisar_antes') == '1'
         repaso = json.loads(cfg_get(con, 'repaso') or '{}')
-    return render_template('ajustes.html', repaso=repaso, smtp=smtp, buzon=buzon, hay_clave=hay_clave, version=VERSION,
+        nombres = {r['id']: r['nombre'] for r in con.execute('SELECT id, nombre FROM clientes')}
+        reglas = []
+        for r in con.execute('SELECT * FROM reglas ORDER BY id DESC'):
+            cuando = json.loads(r['cuando'] or '{}')
+            hacer = json.loads(r['hacer'] or '{}')
+            reglas.append({**dict(r), 'cuando_l': cuando, 'cliente': nombres.get(hacer.get('cliente_id'), '')
+                           if 'cliente_id' in hacer else None, 'recogida': hacer.get('recogida')})
+    return render_template('ajustes.html', reglas=reglas, repaso=repaso, smtp=smtp, buzon=buzon, hay_clave=hay_clave, version=VERSION,
                            revisar_antes=revisar_antes)
 
 

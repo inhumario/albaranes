@@ -1,0 +1,11 @@
+<div class="doc" id="a{{ a['id'] }}">
+  <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
+  <div class="pie">
+    <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
+    {% if mostrar_carpeta %}<div class="mini">📁 {{ a['ruta'].split('/', 1)[1].rsplit('/', 1)[0] }}/</div>{% endif %}
+    {% if a['adjuntos'] %}{% set partes = a['adjuntos'].split(', ') %}{% set pegados = partes | reject('in', ['enderezado', 'otra versión']) | list %}{% if pegados %}<div class="adjunto">📎 con {{ pegados | join(', ') }}</div>{% endif %}{% if 'enderezado' in partes %}<div class="adjunto">↻ venía al revés: enderezado</div>{% endif %}{% if 'otra versión' in partes %}<div class="adjunto">⚠️ trae dos versiones distintas: mandan los datos de la última</div>{% endif %}{% endif %}{% if a['recogida'] %}<div class="adjunto">🚚 recogida{{ ' en ' ~ a['origen'] if a['origen'] }} para llevar a {{ a['cliente'] or 'el cliente' }}</div>{% endif %}
+    <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}{% if a['confianza']=='corregido' %} · corregido a mano{% elif a['visto'] %} · según lo aprendido{% endif %}</div>
+    <div class="mini">{% if a['fecha_doc'] %}📅 {{ a['fecha_doc'][8:10] }}/{{ a['fecha_doc'][5:7] }}/{{ a['fecha_doc'][:4] }}{% else %}<span style="color:var(--aviso)">📅 sin fecha leída · colocado por la del escaneo</span>{% endif %}</div>
+    {% include '_corregir.html' %}
+  </div>
+</div>

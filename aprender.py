@@ -1,0 +1,124 @@
+"""Corregir hablando: la persona cuenta qué pasa con un albarán y la app lo entiende, lo aplica
+y, si se marca «siempre», lo guarda como regla para los que vengan (petición de Mario 05-11-2026:
+«en corregir poner un campo que nos permita conversacionalmente decir lo que ocurre y que haya un
+check de hacer siempre esto o solo ahora»).
+
+Una regla = cuándo (emisor / a quién se entrega / origen / destino del albarán) + qué hacer
+(cliente, recogida sí o no). Lo propio de un solo albarán (número, fecha, palés) nunca se
+convierte en regla."""
+import json
+import re
+import sqlite3
+from datetime import datetime
+
+import procesador
+
+MODELO = 'claude-sonnet-5'
+
+PROMPT = """Eres el asistente de una app que archiva albaranes escaneados de un transportista.
+Cada albarán va a la carpeta de un CLIENTE (la empresa a la que se le presentan) y con su fecha de carga.
+Una RECOGIDA es un albarán de otra empresa (un proveedor del cliente) cuya mercancía el camión
+recoge en el ORIGEN y lleva al cliente: va con los albaranes del cliente.
+
+Albarán que está mirando la persona:
+{albaran}
+
+Clientes configurados en la app: {clientes}
+
+La persona escribe esto sobre el albarán:
+«{texto}»
+
+Quiere aplicarlo: {alcance}
+
+Devuelve SOLO un JSON, sin nada más:
+{{
+  "entendido": "una o dos frases en castellano, de tú, con lo que vas a hacer (p. ej. «Lo pongo como recogida en Santa Perpetua para Delaviuda»)",
+  "este": {{solo los campos de ESTE albarán que cambian, de entre: "numero" (texto), "fecha" (AAAA-MM-DD, fecha de carga), "cliente" (nombre EXACTO de la lista o null para sin cliente), "recogida" (true/false), "origen" (población en mayúsculas), "destino" (población en mayúsculas), "pales" (número)}},
+  "regla": null o {{"cuando": {{solo las condiciones que identifican los albaranes parecidos, de entre "emisor", "entrega_a", "origen", "destino", con el valor tal cual o abreviado}}, "hacer": {{de entre "cliente" (nombre exacto de la lista) y "recogida" (true/false)}}}},
+  "duda": null o "la pregunta, si no se entiende qué quiere o pide algo que la app no puede hacer"
+}}
+Si el alcance es «solo este albarán», "regla" es null. Si es «siempre», la regla tiene que valer
+para los albaranes PARECIDOS (lo normal: el mismo emisor), nunca números, fechas ni palés concretos."""
+
+
+def tabla(con: sqlite3.Connection) -> None:
+    con.execute('''CREATE TABLE IF NOT EXISTS reglas (
+        id INTEGER PRIMARY KEY,
+        texto TEXT NOT NULL,          -- lo que escribió la persona
+        entendido TEXT NOT NULL,      -- lo que entendió la app
+        cuando TEXT NOT NULL,         -- JSON: emisor / entrega_a / origen / destino
+        hacer TEXT NOT NULL,          -- JSON: cliente_id / recogida
+        veces INTEGER NOT NULL DEFAULT 0,
+        creado TEXT NOT NULL)''')
+    for col in ('entrega_a TEXT', 'visto INTEGER NOT NULL DEFAULT 0'):
+        try:
+            con.execute(f'ALTER TABLE albaranes ADD COLUMN {col}')
+        except sqlite3.OperationalError:
+            pass
+
+
+def _json(texto: str) -> dict:
+    m = re.search(r'\{.*\}', texto, re.S)
+    return json.loads(m.group(0)) if m else {}
+
+
+def interpretar(a: dict, clientes: list[str], texto: str, siempre: bool) -> dict:
+    datos = {k: a.get(k) for k in ('numero', 'emisor', 'entrega_a', 'origen', 'destino', 'fecha_doc',
+                                    'pales', 'peso_kg', 'recogida', 'cliente')}
+    prompt = PROMPT.format(albaran=json.dumps(datos, ensure_ascii=False), clientes=', '.join(clientes) or '(ninguno)',
+                           texto=texto.strip(), alcance='SIEMPRE que pase esto' if siempre else 'solo este albarán')
+    with procesador._LECTURAS:
+        resp = procesador._api().messages.create(model=MODELO, max_tokens=2000,
+                                                  messages=[{'role': 'user', 'content': prompt}])
+    salida = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
+    try:
+        return _json(salida)
+    except json.JSONDecodeError:
+        return {'duda': 'No he entendido bien lo que hay que hacer. ¿Puedes contarlo de otra forma?'}
+
+
+def _casa(valor, patron) -> bool:
+    v, p = procesador.normaliza(valor or ''), procesador.normaliza(patron or '')
+    return bool(v and p and (p in v or v in p))
+
+
+def regla_para(con: sqlite3.Connection, datos: dict):
+    """La regla aprendida que casa con un albarán (todas sus condiciones), o None."""
+    for r in con.execute('SELECT * FROM reglas ORDER BY id DESC'):
+        cuando = json.loads(r['cuando'] or '{}')
+        if cuando and all(_casa(datos.get(k), v) for k, v in cuando.items()):
+            return r
+    return None
+
+
+def aplicar_regla(con: sqlite3.Connection, datos: dict, cliente, recogida: bool):
+    """Al procesar: si hay regla aprendida para este albarán, manda ella. Devuelve
+    (cliente, recogida, regla o None)."""
+    r = regla_para(con, datos)
+    if not r:
+        return cliente, recogida, None
+    hacer = json.loads(r['hacer'] or '{}')
+    if 'cliente_id' in hacer:
+        cliente = con.execute('SELECT * FROM clientes WHERE id=?', (hacer['cliente_id'],)).fetchone() \
+            if hacer['cliente_id'] else None
+    if 'recogida' in hacer:
+        recogida = bool(hacer['recogida'])
+    con.execute('UPDATE reglas SET veces = veces + 1 WHERE id=?', (r['id'],))
+    return cliente, recogida, r
+
+
+def guardar_regla(con: sqlite3.Connection, texto: str, entendido: str, regla: dict, clientes: dict) -> int | None:
+    cuando = {k: v for k, v in (regla.get('cuando') or {}).items()
+              if k in ('emisor', 'entrega_a', 'origen', 'destino') and v}
+    hacer = {}
+    h = regla.get('hacer') or {}
+    if 'cliente' in h:
+        hacer['cliente_id'] = clientes.get(h['cliente']) if h['cliente'] else None
+    if 'recogida' in h:
+        hacer['recogida'] = bool(h['recogida'])
+    if not cuando or not hacer:
+        return None
+    cur = con.execute('INSERT INTO reglas (texto, entendido, cuando, hacer, creado) VALUES (?,?,?,?,?)',
+                      (texto.strip(), entendido, json.dumps(cuando, ensure_ascii=False), json.dumps(hacer),
+                       datetime.now().isoformat(timespec='seconds')))
+    return cur.lastrowid

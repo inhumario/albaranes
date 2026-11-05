@@ -8,6 +8,15 @@
 .barra span{display:block;height:100%;background:var(--filete);transition:width .5s}
 .enviar-todo{position:sticky;bottom:0;background:var(--fondo);border-top:2px solid var(--filete);padding:.8rem 0;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
 .enviar-todo .boton{font-size:1rem;padding:.6rem 1.2rem}
+.explicar textarea{width:100%;box-sizing:border-box;font:inherit;padding:.4rem;border:1px solid var(--borde);border-radius:6px;margin-top:.4rem}
+.alcance{display:flex;flex-direction:column;gap:.2rem;margin:.35rem 0}
+.alcance label{display:flex;align-items:center;gap:.35rem;font-weight:400;color:var(--texto);font-size:.9rem}
+.alcance input{width:auto;margin:0}
+.a-mano{margin-top:.4rem}
+details.bien{margin-top:1rem}
+details.bien>summary{cursor:pointer;padding:.7rem .9rem;background:#fff;border:1px solid var(--borde);border-radius:8px;font-weight:600;list-style-position:inside}
+details.bien[open]>summary{margin-bottom:.8rem}
+.todo-bien{background:#fff;border:1px solid var(--borde);border-left:4px solid var(--filete);border-radius:8px;padding:.7rem .9rem;margin:.6rem 0}
 @media (max-width:640px){.rejilla{grid-template-columns:repeat(2,1fr);gap:.6rem;padding:.6rem}.carpeta-cab form{margin-left:0}}
 </style>
 
@@ -115,6 +124,7 @@
 </div>
 {% endif %}
 {% if esperando %}
+<details class="bien"><summary>⏳ {{ esperando|length }} orden{{ 'es' if esperando|length > 1 }} de carga esperando sus albaranes · no hay que hacer nada</summary>
 <div class="carpeta">
   <div class="carpeta-cab">
     <span class="ruta">⏳ Órdenes de carga esperando sus albaranes</span>
@@ -132,8 +142,25 @@
   {% endfor %}
   </div>
 </div>
+</details>
 {% endif %}
 
+{% if mirar %}
+<div class="carpeta dudas">
+  <div class="carpeta-cab">
+    <span class="ruta">👀 Para mirar una vez</span>
+    <span class="destino">la app los ha colocado sola, pero son casos raros (recogidas, dos versiones, sin fecha). Si está bien, no hay que hacer nada; si no, cuéntaselo en «Corregir» y elige si vale solo para este o para siempre</span>
+  </div>
+  <div class="rejilla">
+  {% for a in mirar %}{% with mostrar_carpeta=True %}{% include '_tarjeta.html' %}{% endwith %}{% endfor %}
+  </div>
+</div>
+{% endif %}
+{% if not dudosos and not mirar and not sueltas and not errores and not incompletos and grupos %}
+<div class="todo-bien">✓ Nada que mirar: todo lo leído está bien colocado.</div>
+{% endif %}
+{% if grupos %}
+<details class="bien"><summary>✓ {{ n_bien }} albaranes bien colocados en {{ grupos|length }} carpeta{{ 's' if grupos|length > 1 }} · no hace falta mirarlos</summary>
 {% for carpeta, g in grupos.items() %}
 <div class="carpeta">
   <div class="carpeta-cab">
@@ -146,34 +173,14 @@
     </form>
   </div>
   <div class="rejilla">
-  {% for a in g['albaranes'] %}
-    <div class="doc">
-      <a href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank"><img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy"></a>
-      <div class="pie">
-        <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
-        {% if a['adjuntos'] %}{% set partes = a['adjuntos'].split(', ') %}{% set pegados = partes | reject('in', ['enderezado', 'otra versión']) | list %}{% if pegados %}<div class="adjunto">📎 con {{ pegados | join(', ') }}</div>{% endif %}{% if 'enderezado' in partes %}<div class="adjunto">↻ venía al revés: enderezado</div>{% endif %}{% if 'otra versión' in partes %}<div class="adjunto">⚠️ trae dos versiones distintas: mandan los datos de la última</div>{% endif %}{% endif %}{% if a['recogida'] %}<div class="adjunto">🚚 recogida{{ ' en ' ~ a['origen'] if a['origen'] }} para llevar a {{ a['cliente'] or 'el cliente' }}</div>{% endif %}
-        <div class="mini">{{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}{% if a['confianza']=='corregido' %} · corregido a mano{% endif %}</div>
-        <div class="mini">{% if a['fecha_doc'] %}📅 {{ a['fecha_doc'][8:10] }}/{{ a['fecha_doc'][5:7] }}/{{ a['fecha_doc'][:4] }}{% else %}<span style="color:var(--aviso)">📅 sin fecha leída · colocado por la del escaneo</span>{% endif %}</div>
-        <details>
-          <summary>Corregir</summary>
-          <form method="post" action="{{ url_for('albaran_corregir', aid=a['id']) }}">
-            <input type="text" name="numero" value="{{ a['numero'] }}" required>
-            <input type="date" name="fecha" value="{{ a['fecha_doc'] or '' }}" title="Fecha del albarán">
-            <select name="cliente_id">
-              <option value="">(sin cliente)</option>
-              {% for c in clientes %}<option value="{{ c['id'] }}" {{ 'selected' if c['id']==a['cliente_id'] }}>{{ c['nombre'] }}</option>{% endfor %}
-            </select>
-            <button class="boton">Guardar</button>
-          </form>
-        </details>
-      </div>
-    </div>
-  {% endfor %}
+  {% for a in g['albaranes'] %}{% include '_tarjeta.html' %}{% endfor %}
   </div>
 </div>
 {% endfor %}
+</details>
+{% endif %}
 
-{% if not grupos and not dudosos and not en_curso and not ordenes %}
+{% if not grupos and not dudosos and not en_curso and not ordenes and not mirar %}
 <div class="aviso">No hay nada pendiente de revisar. Sube un escaneo desde <a href="{{ url_for('index') }}">Subir escaneo</a>.</div>
 {% endif %}
 

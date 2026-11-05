@@ -1,0 +1,24 @@
+{# Corregir un albarán: contándolo (la app lo entiende y puede aprenderlo) o a mano #}
+<details{{ ' open' if abierto }}>
+  <summary>Corregir</summary>
+  <form method="post" action="{{ url_for('albaran_explicar', aid=a['id']) }}" class="explicar">
+    <textarea name="texto" rows="3" placeholder="Cuéntame qué pasa con este albarán. Ej.: «es una recogida en Fuji Oil para Delaviuda» o «este no es de Delaviuda, es de otro cliente»" required></textarea>
+    <div class="alcance">
+      <label><input type="radio" name="alcance" value="solo" checked> Solo este</label>
+      <label><input type="radio" name="alcance" value="siempre"> Hacer siempre esto</label>
+    </div>
+    <button class="boton">Aplicar</button>
+  </form>
+  <details class="a-mano">
+    <summary class="mini">o cambiar a mano número, fecha o cliente</summary>
+    <form method="post" action="{{ url_for('albaran_corregir', aid=a['id']) }}">
+      <input type="text" name="numero" value="{{ a['numero'] or '' }}" placeholder="Nº del albarán" required>
+      <input type="date" name="fecha" value="{{ a['fecha_doc'] or '' }}" title="Fecha del albarán">
+      <select name="cliente_id">
+        <option value="">(sin cliente)</option>
+        {% for c in clientes %}<option value="{{ c['id'] }}" {{ 'selected' if c['id']==a['cliente_id'] }}>{{ c['nombre'] }}</option>{% endfor %}
+      </select>
+      <button class="boton suave">Guardar</button>
+    </form>
+  </details>
+</details>
