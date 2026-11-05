@@ -34,7 +34,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.6.1'
+VERSION = '1.6.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
