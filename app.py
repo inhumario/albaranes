@@ -36,7 +36,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.8.3'
+VERSION = '1.8.4'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -203,6 +203,11 @@ def init_db() -> None:
                 cfg_set(con, b, str(v.get(a, '')))
         # v1.7.1: las recogidas ya guardadas con su número pasan a «fecha-origen.destino»
         try:
+            for a in con.execute("SELECT * FROM albaranes WHERE estado='revisar' AND numero IS NULL "
+                                 "AND cliente_id IS NOT NULL AND fecha_doc IS NOT NULL").fetchall():
+                con.execute("UPDATE albaranes SET estado='colocado', visto=0 WHERE id=?", (a['id'],))
+                recolocar(con, con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone(),
+                          fecha_de(a))
             renombrar_recogidas(con)
             ordenar_series(con)
         except Exception:
@@ -318,12 +323,20 @@ def nombre_recogida(cuando: datetime, origen, destino, emisor, cliente) -> str:
     return f'{cuando:%d-%m-%Y}-{o}.{d}'.translate(PROHIBIDOS) + '.pdf'
 
 
-def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime, recogida=None) -> str:
+def nombre_sin_numero(cuando: datetime, destino) -> str:
+    """Albarán de un cliente con el número tapado o ilegible (pegatina encima): se coloca
+    igual (Mario 05-11: «tienes que leerlos vayan como vayan») y sale en «Para mirar»."""
+    return f'sin-numero-{cuando:%d-%m-%Y}-{(destino or "sin destino").strip().upper()}'.translate(PROHIBIDOS) + '.pdf'
+
+
+def nombre_fichero(cliente, numero: str, emisor: str, cuando: datetime, recogida=None, destino=None) -> str:
     """Nombre del PDF según el formato que pide cada cliente (ficha del cliente).
     Variables: {numero} {cliente} {emisor} {fecha} (AAAAMMDD) {año} {mes} {dia}.
     `recogida` = (origen, destino) si el albarán es una recogida: manda nombre_recogida."""
     if recogida:
         return nombre_recogida(cuando, recogida[0], recogida[1], emisor, cliente)
+    if not numero:
+        return nombre_sin_numero(cuando, destino)
     formato = (cliente['nombre_formato'] if cliente else '') or '{numero}'
     valores = {'numero': numero, 'cliente': cliente['nombre'] if cliente else '',
                'emisor': emisor or '', 'fecha': f'{cuando:%Y%m%d}', 'año': f'{cuando:%Y}',
@@ -347,12 +360,12 @@ def renombrar(con, aid: int) -> str | None:
     """Pone a un albarán ya guardado el nombre que le toca según sus datos de ahora (misma
     carpeta). Devuelve el nombre nuevo si ha cambiado."""
     a = con.execute('SELECT * FROM albaranes WHERE id=?', (aid,)).fetchone()
-    if not a or a['estado'] in ('entregado', 'descartado', 'revisar') or not (a['numero'] or de_recogida(a)):
+    if not a or a['estado'] in ('entregado', 'descartado', 'revisar') or not (a['numero'] or a['cliente_id']):
         return None
     cliente = con.execute('SELECT * FROM clientes WHERE id=?', (a['cliente_id'],)).fetchone() \
         if a['cliente_id'] else None
     origen = DATA / a['ruta']
-    nombre = nombre_fichero(cliente, a['numero'], a['emisor'], fecha_de(a), de_recogida(a))
+    nombre = nombre_fichero(cliente, a['numero'], a['emisor'], fecha_de(a), de_recogida(a), a['destino'])
     if origen.name == nombre or not origen.exists():
         return None
     destino = destino_libre(origen.parent, nombre, origen)
@@ -526,6 +539,11 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                     # regla de Mario 05-11: se sube igual y se nombra fecha-recogida.entrega;
                     # el número del proveedor no hace falta, así que no va a REVISAR por él
                     g['revisar'] = False
+                if cliente and not recogida and g['revisar'] and not g['numero'] \
+                        and fecha_valida(g.get('fecha') or g.get('fecha_documento')):
+                    # de un cliente conocido pero sin número legible: se coloca igual
+                    g['fecha'] = g.get('fecha') or g.get('fecha_documento')
+                    g['revisar'] = False
                 previo = con.execute(
                     "SELECT * FROM albaranes WHERE numero=? AND cliente_id IS ? AND estado != 'descartado'",
                     (g['numero'], cliente['id'] if cliente else None)).fetchone() \
@@ -553,8 +571,8 @@ def procesar_lote(lote_id: int, pdf: Path) -> None:
                 if fuera and not g['revisar']:
                     nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando,
                                             (g.get('origen'), g.get('destino')))
-                elif g['numero'] and not g['revisar']:
-                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando)
+                elif not g['revisar']:
+                    nombre = nombre_fichero(cliente, g['numero'], g['emisor'], cuando, destino=g.get('destino'))
                 else:
                     nombre = f"{g['numero'] or 'sin-numero-lote%d-p%d' % (lote_id, g['paginas'][0]+1)}.pdf"
                 destino = destino_libre(carpeta, nombre)
@@ -713,7 +731,7 @@ def recolocar(con, a, fecha: datetime) -> str:
         if a['cliente_id'] else None
     carpeta = carpeta_de(cliente, a['emisor'], fecha)
     carpeta.mkdir(parents=True, exist_ok=True)
-    destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha, de_recogida(a)),
+    destino = destino_libre(carpeta, nombre_fichero(cliente, a['numero'], a['emisor'], fecha, de_recogida(a), a['destino']),
                             DATA / a['ruta'])
     (DATA / a['ruta']).rename(destino)
     con.execute('UPDATE albaranes SET fecha_doc=?, ruta=? WHERE id=?',
@@ -1277,7 +1295,7 @@ def revision():
     # mirar una vez (recogidas, dos versiones, sin fecha). Lo corregido o aprendido ya no se pide.
     def para_mirar(a):
         return not a['visto'] and (a['recogida'] or 'otra versión' in (a['adjuntos'] or '')
-                                   or not a['fecha_doc'])
+                                   or not a['fecha_doc'] or not a['numero'])
     mirar = [{'a': a, 'porque': por_que_mirar(a)} for g in grupos.values() for a in g['albaranes'] if para_mirar(a)]
     for g in grupos.values():
         g['albaranes'] = [a for a in g['albaranes'] if not para_mirar(a)]
@@ -1327,6 +1345,12 @@ def por_que_mirar(a) -> list[dict]:
                                f'recogida de la factura.',
                       'si_no': f'Si con {emisor} es siempre así, cuéntalo en «Corregir» con «Hacer siempre esto» '
                                f'y no volverá a preguntarse.'})
+    if not a['numero'] and not a['recogida']:
+        casos.append({'titulo': 'El número no se puede leer',
+                      'texto': f'Es de {a["cliente"] or "un cliente"}, pero su número está tapado (p. ej. por una '
+                               f'pegatina) o no se lee. La app lo ha colocado igual en su carpeta, con la fecha y el '
+                               f'destino en el nombre ({Path(a["ruta"]).name}).',
+                      'si_no': 'Si tienes el papel, escribe el número en «Corregir» y se renombra solo.'})
     if not a['fecha_doc']:
         casos.append({'titulo': 'Sin fecha de carga',
                       'texto': f'No se ha podido leer la fecha de carga y se ha guardado en el mes en que se escaneó '
@@ -1994,14 +2018,11 @@ def a_su_cliente(con, a, info, cliente) -> str:
                 (emisor, origen, destino, f'{fecha:%Y-%m-%d}' if fecha else None, a['id']))
     a2 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
     if not numero:
-        carpeta = ARCHIVO / 'REVISAR'
-        carpeta.mkdir(parents=True, exist_ok=True)
-        destino_f = destino_libre(carpeta, f"sin-numero-{a['id']}.pdf", DATA / a['ruta'])
-        (DATA / a['ruta']).rename(destino_f)
-        con.execute("UPDATE albaranes SET cliente_id=?, numero=NULL, estado='revisar', ruta=?, "
-                    "entrega_nota='el número no se ve (tapado o ilegible): escríbelo' WHERE id=?",
-                    (cliente['id'], str(destino_f.relative_to(DATA)), a['id']))
-        return f"❓ {Path(a['ruta']).name}: de {cliente['nombre']}, pero el número no se ve → Revisión"
+        con.execute("UPDATE albaranes SET cliente_id=?, numero=NULL, estado='colocado', visto=0 WHERE id=?",
+                    (cliente['id'], a['id']))
+        a3 = con.execute('SELECT * FROM albaranes WHERE id=?', (a['id'],)).fetchone()
+        movido = recolocar(con, a3, fecha or fecha_de(a3))
+        return f"❓ {Path(a['ruta']).name}: de {cliente['nombre']}, número tapado o ilegible → {movido} (sale en «Para mirar»)"
     error = recolocar_corregido(con, a2, numero, cliente, fecha)
     if error:
         return f"· {Path(a['ruta']).name}: {error}"
