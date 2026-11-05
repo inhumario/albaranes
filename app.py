@@ -13,6 +13,7 @@ pestaña Revisión ordenado por cliente y carpeta; nada sale hacia los clientes
 hasta pulsar «Enviar».
 """
 import hashlib
+import shutil
 import subprocess
 import json
 import re
@@ -35,7 +36,7 @@ import listado
 import factura as lector_factura
 import procesador
 
-VERSION = '1.8.1'
+VERSION = '1.8.2'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -2050,7 +2051,7 @@ def repasar_sin_cliente() -> None:
                         w.add_page(derecha if k == 0 else pg)
                     with open(f'{tmp}/d.pdf', 'wb') as f:
                         w.write(f)
-                    Path(f'{tmp}/d.pdf').replace(pdf)
+                    shutil.move(f'{tmp}/d.pdf', pdf)  # /tmp y /data son discos distintos
             with _ESCRITURA, db() as con:
                 cliente, recogida = cliente_del_albaran(a['emisor'] or info.get('emisor'), info.get('entrega_a'), con)
                 if not recogida:
