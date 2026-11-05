@@ -33,7 +33,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.4.1'
+VERSION = '1.5.0'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -695,6 +695,19 @@ def aprobar(albaran_id: int, con: sqlite3.Connection) -> str:
 
 
 # ---------------------------------------------------------------------- rutas
+def ordenes_por_revisar(con: sqlite3.Connection) -> int:
+    """Órdenes de carga sueltas que necesitan a una persona. Las que esperan a que se escaneen
+    TODOS sus albaranes no cuentan: eso es «faltan escaneos» y se pegan solas al llegar."""
+    escaneados = {r[0] for r in con.execute("SELECT numero FROM albaranes WHERE estado != 'descartado' "
+                                             "AND numero IS NOT NULL")}
+    n = 0
+    for o in con.execute('SELECT citados FROM anexos WHERE unido_a IS NULL'):
+        citados = set(json.loads(o['citados'] or '[]'))
+        if not citados or citados & escaneados:
+            n += 1
+    return n
+
+
 @app.route('/')
 @requiere_acceso
 def inicio():
@@ -704,8 +717,7 @@ def inicio():
         lotes_colgados(con)
         leyendo = con.execute("SELECT COUNT(*) FROM lotes WHERE estado='procesando'").fetchone()[0]
         n_clientes = con.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
-        n['revisar'] = n.get('revisar', 0) + con.execute(
-            'SELECT COUNT(*) FROM anexos WHERE unido_a IS NULL').fetchone()[0]
+        n['revisar'] = n.get('revisar', 0) + ordenes_por_revisar(con)
         faltan = faltan_total(con)
         errores = len(lotes_con_error(con))
     accesos = [
@@ -845,7 +857,7 @@ def comprobar_cierre(con: sqlite3.Connection, mes: str, lista: list[dict]) -> li
               else 'Todos los albaranes de las órdenes de carga están escaneados',
               'detalle': ', '.join(faltan[:30]) + (' …' if len(faltan) > 30 else '')})
     dudosos = con.execute("SELECT COUNT(*) FROM albaranes WHERE estado='revisar'").fetchone()[0] + \
-        con.execute('SELECT COUNT(*) FROM anexos WHERE unido_a IS NULL').fetchone()[0]
+        ordenes_por_revisar(con)
     errores = len(lotes_con_error(con))
     c.append({'nivel': 'falta' if dudosos or errores else 'ok',
               'texto': (f'{dudosos} cosa(s) por revisar' + (f' y {errores} escaneo(s) sin leer' if errores else '')
@@ -1060,8 +1072,11 @@ def revision():
             ya = con.execute(f"SELECT numero FROM albaranes WHERE numero IN ({','.join('?' * len(refs))}) "
                              "AND estado='entregado'", refs).fetchall() if refs else []
             rango = procesador.numeros_citados(o['ref_texto'])
-            ordenes.append({**dict(o), 'refs_l': refs, 'rango': rango,
-                            'entregados': [r['numero'] for r in ya]})
+            citados = json.loads(o['citados'] or '[]')
+            hay = con.execute(f"SELECT COUNT(*) FROM albaranes WHERE estado != 'descartado' AND numero IN "
+                              f"({','.join('?' * len(citados))})", citados).fetchone()[0] if citados else 1
+            ordenes.append({**dict(o), 'refs_l': refs, 'rango': rango, 'esperando': not hay,
+                            'citados_l': citados, 'entregados': [r['numero'] for r in ya]})
     grupos = {}  # carpeta → {cliente, destino, albaranes}
     for a in filas:
         if a['estado'] != 'colocado':
@@ -1709,7 +1724,9 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
             continue
         f = fecha_valida(v.get('fecha'))
         destino = procesador.normaliza(exportar.sin_tildes(v['destino']))
-        if f and destino and not v['albaranes'][len(v['refs']):]:
+        ya = sum((por_numero.get(n) or {}).get('pales') or 0 for n in v['albaranes'])
+        cuadra_ya = v['albaranes'] and (v.get('cantidad') or 0) > 1 and abs(ya - v['cantidad']) < 0.01
+        if f and destino and not cuadra_ya and not v['albaranes'][len(v['refs']):]:
             dias = {f'{f:%Y-%m-%d}', f'{f - timedelta(days=1):%Y-%m-%d}'}
             tomar(v, [a['numero'] for a in albs if a['numero'] not in usados and a['fecha_doc'] in dias
                       and a['destino'] and destino in procesador.normaliza(exportar.sin_tildes(a['destino']))])
@@ -1723,9 +1740,44 @@ def cruzar_factura(datos: dict, con: sqlite3.Connection) -> dict:
         dias = {f'{f:%Y-%m-%d}', f'{f - timedelta(days=1):%Y-%m-%d}'}
         libres = [sorted(n for n in json.loads(o['citados'] or '[]') if n in escaneados)
                   for o in filas_ordenes if o['fecha'] in dias]
-        libres = [l for l in libres if l and not usados & set(l)]
-        if len(libres) == 1:
+        libres = [list(t) for t in dict.fromkeys(tuple(l) for l in libres if l and not usados & set(l))]
+        if len(libres) == 1:  # (dos copias escaneadas de la misma orden cuentan como una)
             tomar(v, libres[0])
+            continue
+        # orden de carga de su fecha sin NINGÚN albarán escaneado (p. ej. el 955 de Sant
+        # Gregori): el viaje es suyo y sus albaranes salen como «faltan», no como «sin albaranes»
+        sin_escanear = [sorted(json.loads(o['citados'] or '[]')) for o in filas_ordenes if o['fecha'] in dias]
+        sin_escanear = [list(t) for t in dict.fromkeys(
+            tuple(l) for l in sin_escanear if l and not set(l) & escaneados and not usados & set(l))]
+        if len(sin_escanear) == 1:
+            tomar(v, sin_escanear[0])
+    # 4.ª pasada: lo que sigue sin viaje. (a) Si un viaje del mismo destino tiene un hueco de
+    # palés que es exactamente el del albarán, va ahí (80466430, 1 palé, en el 876 de 33).
+    # (b) Si queda un viaje vacío y UN solo albarán suelto de su destino, es el suyo aunque la
+    # fecha no cuadre (80466365 de Montcada en el 893).
+    mes_f = (datos.get('fecha') or '')[:7]
+    def sueltos():
+        return [a for a in albs if a['numero'] not in usados and not a['recogida']
+                and (a['fecha_doc'] or '').startswith(mes_f) and a['destino']]
+    def mismo_destino(v, a):
+        d = procesador.normaliza(exportar.sin_tildes(v['destino']))
+        return d and d in procesador.normaliza(exportar.sin_tildes(a['destino']))
+    for a in sueltos():
+        huecos = []
+        for v in viajes:
+            if v.get('recogida') or not v['albaranes'] or not mismo_destino(v, a):
+                continue
+            ya = sum((por_numero.get(n) or {}).get('pales') or 0 for n in v['albaranes'])
+            if (v.get('cantidad') or 0) > 1 and a['pales'] and abs(v['cantidad'] - ya - a['pales']) < 0.01:
+                huecos.append(v)
+        if len(huecos) == 1:
+            tomar(huecos[0], [a['numero']])
+    for v in viajes:
+        if v['albaranes'] or v.get('recogida'):
+            continue
+        cand = [a for a in sueltos() if mismo_destino(v, a)]
+        if len(cand) == 1:
+            tomar(v, [cand[0]['numero']])
     for v in viajes:
         vistos = v['albaranes']
         v['faltan'] = [n for n in vistos if n not in por_numero]

@@ -35,7 +35,7 @@ Extrae en JSON estricto, sin nada más:
   "hoja": "valor del campo SHEET/HOJA si existe, si no null",
   "fecha": "SOLO la fecha de CARGA en formato AAAA-MM-DD: en un albarán, la de LOADING / Expedición / Fecha de carga / Fecha de salida / Fecha de recogida; en una orden de carga, su campo FECHA. NUNCA la de entrega (DELIVERY, Entrega) ni la del pedido (Nº PEDIDO/FECHA) ni sellos de recepción. Si la casilla de carga o expedición está vacía, null. Las fechas van día/mes/año (29.06.2026 = 2026-06-29)",
   "peso_bruto": "solo en albaranes: PESO BRUTO total del albarán en kg, como número con punto decimal (1.138,200 → 1138.2); null si no aparece",
-  "pales": "solo en albaranes: número total de palés (PALLETS / PALES / Nº PALETS) como número; null si no aparece",
+  "pales": "solo en albaranes: número TOTAL de palés del albarán, como número. Por orden: (1) si hay una línea de PALETS CHEP / PALETS EUR / PALETS (código 10000), su cantidad en la columna CASES / CAJAS es el total; (2) si no, la casilla PALLETS / PALES / Nº PALETS del pie, o la suma de las líneas de palés si no hay total. La columna PALLET / PALETS de cada línea de mercancía NO es el total cuando hay línea de PALETS CHEP. null si no aparece",
   "destino": "solo en albaranes: población del domicilio de envío de la mercancía, en mayúsculas y sin código postal (p.ej. BARCELONA); null si no aparece",
   "entrega_a": "solo en albaranes: empresa a la que se ENTREGA la mercancía (Datos de entrega / Destinatario / Consignee / Ship to / Cliente), marca principal en minúsculas y UNA palabra (p.ej. 'delaviuda'); null si no aparece",
   "origen": "solo en albaranes: población donde se RECOGE la mercancía si el documento trae un Lugar de recogida / Lugar de carga distinto del membrete, en mayúsculas y sin código postal (p.ej. SANTA PERPETUA DE LA MOGODA); null si no aparece",
@@ -252,10 +252,13 @@ def _analizar_pagina(png: Path, pdf: Path, pagina: int) -> dict:
     return info
 
 
-PROMPT_PALES = ('Esto es un albarán de transporte escaneado. Di el NÚMERO TOTAL DE PALÉS de la mercancía: '
-                'casilla PALLETS / PALES / Nº PALETS / BULTOS-PALÉS del pie, o la suma de las líneas de palés si '
-                'no hay total. Responde solo con el número (p. ej. 12). Si esta hoja NO es un albarán (una ORDEN '
-                'DE CARGA, un vale de palés, una confirmación de otra empresa) o no aparece, responde NO.')
+PROMPT_PALES = ('Esto es un albarán de transporte escaneado. Di el NÚMERO TOTAL DE PALÉS del albarán. Por orden: '
+                '(1) si hay una línea de PALETS CHEP / PALETS EUR / PALETS (código 10000), su cantidad en la columna '
+                'CASES / CAJAS es el total; (2) si no, la casilla PALLETS / PALES / Nº PALETS / BULTOS-PALÉS del pie, o '
+                'la suma de las líneas de palés si no hay total. La columna PALLET / PALETS de cada línea NO es el '
+                'total cuando hay línea de PALETS CHEP. Responde solo con el número (p. ej. 12). Si esta hoja '
+                'NO es un albarán (una ORDEN DE CARGA, un vale de palés, una confirmación de otra empresa) o no se '
+                'puede saber, responde NO.')
 
 
 def leer_pales(pdf: Path) -> float | None:
