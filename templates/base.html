@@ -32,7 +32,7 @@ body{margin:0;font-family:'Helvetica Neue',Helvetica,Arial,sans-serif;-webkit-fo
 .cuenta-menu{background:var(--coral);color:var(--ink);border-radius:999px;font-size:11px;font-weight:700;padding:1px 7px;margin-left:3px}
 .topbar .salir{color:#9C9CA0;font-size:12.5px;padding:6px 8px;border-radius:6px;text-decoration:none;margin-left:auto;white-space:nowrap}
 .topbar .salir:hover{background:var(--ink-3);color:#fff}
-main{max-width:1000px;margin:0 auto;padding:1.2rem 16px 3rem}
+main{max-width:1440px;margin:0 auto;padding:1.2rem 16px 3rem}
 h1{color:var(--titulo);font-size:1.45rem;margin:.4rem 0 1rem}
 h2{color:var(--sub);font-size:1.1rem;margin:1.6rem 0 .6rem}
 .aviso{background:var(--cab);border:1px solid var(--borde);border-left:4px solid var(--filete);
@@ -119,6 +119,19 @@ main a:not(.boton):not(.carpeta-t):not(.filtro){text-decoration-color:var(--cora
 .carpeta-cab .destino{font-size:.88rem;color:var(--sub)}
 .carpeta-cab form{margin-left:auto}
 .carpeta-cab .boton,.carpeta-cab form{margin-left:auto}
+.casos{display:flex;flex-direction:column;gap:.8rem;padding:.9rem}
+.caso{display:grid;grid-template-columns:170px minmax(0,1fr) 320px;gap:1.1rem;align-items:start;background:var(--fondo);border:1px solid var(--borde);border-radius:8px;padding:.9rem}
+.caso-img{display:flex;flex-direction:column;gap:.3rem;text-decoration:none}
+.caso-img img{width:100%;aspect-ratio:210/297;object-fit:cover;object-position:top;border:1px solid var(--borde);border-radius:6px;background:#fff}
+.caso-texto .nombre{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--titulo);font-size:1.05rem}
+.porque{margin-top:.7rem;padding:.6rem .8rem;background:#fff;border-left:4px solid var(--coral);border-radius:6px;line-height:1.55}
+.porque p{margin:.3rem 0 0}
+.caso-acciones{display:flex;flex-direction:column;gap:.5rem}
+.caso-acciones .boton{width:100%}
+.caso-acciones details summary{cursor:pointer;color:var(--sub);font-size:.9rem}
+.caso-acciones textarea{width:100%;box-sizing:border-box}
+@media (max-width:1000px){.caso{grid-template-columns:130px minmax(0,1fr)}.caso-acciones{grid-column:1 / -1}}
+@media (max-width:640px){.caso{grid-template-columns:90px minmax(0,1fr);gap:.7rem;padding:.7rem}.casos{padding:.6rem}}
 .adjunto{display:inline-block;font-size:.78rem;font-weight:600;background:#EFEBF8;color:#5B4B8A;border-radius:99px;padding:.05rem .5rem;margin:.2rem 0}
 .cab-archivo{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-bottom:.4rem}
 .cab-archivo h1{margin:.4rem 0}

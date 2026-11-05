@@ -1,0 +1,25 @@
+{# Un albarán de «Para mirar»: miniatura · qué pasa y qué ha hecho la app · acciones #}
+{% set a = m['a'] %}
+<div class="caso" id="a{{ a['id'] }}">
+  <a class="caso-img" href="{{ url_for('albaran_pdf', aid=a['id']) }}" target="_blank" title="Abrir el PDF">
+    <img src="{{ url_for('albaran_miniatura', aid=a['id']) }}" alt="" loading="lazy">
+    <span class="mini">Abrir PDF · {{ a['paginas'] }} hoja{{ 's' if a['paginas'] > 1 }}</span>
+  </a>
+  <div class="caso-texto">
+    <div class="nombre">{{ a['ruta'].rsplit('/', 1)[1] }}</div>
+    <div class="mini">📁 {{ a['ruta'].split('/', 1)[1].rsplit('/', 1)[0] }}/ · 📅 carga {% if a['fecha_doc'] %}{{ a['fecha_doc'][8:10] }}/{{ a['fecha_doc'][5:7] }}/{{ a['fecha_doc'][:4] }}{% else %}sin leer{% endif %}{% if a['destino'] %} · {{ a['destino'] }}{% endif %}{% if a['pales'] %} · {{ '%g' % a['pales'] }} palés{% endif %}</div>
+    {% for c in m['porque'] %}
+    <div class="porque">
+      <strong>{{ c['titulo'] }}</strong>
+      <p>{{ c['texto'] }}</p>
+      <p class="mini">Si está bien, pulsa «Está bien así». {{ c['si_no'] }}</p>
+    </div>
+    {% endfor %}
+  </div>
+  <div class="caso-acciones">
+    <form method="post" action="{{ url_for('albaran_visto', aid=a['id']) }}">
+      <button class="boton">✓ Está bien así</button>
+    </form>
+    {% with abierto=False %}{% include '_corregir.html' %}{% endwith %}
+  </div>
+</div>

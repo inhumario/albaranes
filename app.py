@@ -34,7 +34,7 @@ import exportar
 import factura as lector_factura
 import procesador
 
-VERSION = '1.6.0'
+VERSION = '1.6.1'
 BASE = Path(__file__).parent
 DATA = Path(os.environ.get('DATA_DIR', BASE))
 ARCHIVO = DATA / 'archivo'
@@ -1098,7 +1098,7 @@ def revision():
     def para_mirar(a):
         return not a['visto'] and (a['recogida'] or 'otra versión' in (a['adjuntos'] or '')
                                    or not a['fecha_doc'])
-    mirar = [a for g in grupos.values() for a in g['albaranes'] if para_mirar(a)]
+    mirar = [{'a': a, 'porque': por_que_mirar(a)} for g in grupos.values() for a in g['albaranes'] if para_mirar(a)]
     for g in grupos.values():
         g['albaranes'] = [a for a in g['albaranes'] if not para_mirar(a)]
     grupos = {k: g for k, g in grupos.items() if g['albaranes']}
@@ -1110,6 +1110,60 @@ def revision():
                            dudosos=dudosos, clientes=clientes, revisar_antes=revisar_antes,
                            n_colocados=sum(len(g['albaranes']) for g in grupos.values()) + len(mirar),
                            n_bien=sum(len(g['albaranes']) for g in grupos.values()))
+
+
+def bonito(lugar: str) -> str:
+    """SANTA PERPETUA DE LA MOGODA → Santa Perpetua de la Mogoda"""
+    menores = {'de', 'del', 'la', 'las', 'los', 'el', 'y', 'i'}
+    return ' '.join(w.lower() if i and w.lower() in menores else w.capitalize()
+                    for i, w in enumerate((lugar or '').split()))
+
+
+def por_que_mirar(a) -> list[dict]:
+    """Explicación en cristiano de por qué un albarán bien colocado sale en «Para mirar»."""
+    casos = []
+    if 'otra versión' in (a['adjuntos'] or ''):
+        with db() as con:
+            l = con.execute('SELECT descartados FROM lotes WHERE id=?', (a['lote_id'],)).fetchone()
+        m = re.search(re.escape(a['numero'] or '') + r' \(trae otra versión con ([^:]+): mandan los datos de la última, ([^)]+)\)',
+                      (l['descartados'] if l else '') or '')
+        def es(t):  # 3115.8 kg → 3.115,8 kg
+            return re.sub(r'\d+(?:\.\d+)?', lambda x: f'{float(x.group()):,.2f}'.rstrip('0').rstrip('.')
+                          .replace(',', '_').replace('.', ',').replace('_', '.'), t)
+        vieja, buena = (es(m.group(1)), es(m.group(2))) if m else ('otros datos', 'los de la última')
+        casos.append({'titulo': 'Escaneado dos veces, con datos distintos',
+                      'texto': f'En el escaneo venía este albarán dos veces y las copias no dicen lo mismo: una pone '
+                               f'{vieja} y la otra {buena}. Suele pasar cuando se rehace el albarán (p. ej. al final '
+                               f'se carga un palé menos). La app usa la última, {buena}, para el Excel y la factura, '
+                               f'y el PDF guarda las dos copias.',
+                      'si_no': 'Si la buena es la otra, cuéntalo en «Corregir».'})
+    if a['recogida']:
+        emisor = (a['emisor'] or 'otra empresa').replace('-', ' ').title()
+        cliente = a['cliente'] or 'el cliente'
+        casos.append({'titulo': f'Recogida: el albarán es de {emisor}, no de {cliente}',
+                      'texto': f'El camión recogió la mercancía en {emisor}'
+                               f'{" (" + bonito(a["origen"]) + ")" if a["origen"] else ""} y la llevó a {cliente}. '
+                               f'Por eso la app lo guarda con los albaranes de {cliente} y lo cruza con el viaje de '
+                               f'recogida de la factura.',
+                      'si_no': f'Si con {emisor} es siempre así, cuéntalo en «Corregir» con «Hacer siempre esto» '
+                               f'y no volverá a preguntarse.'})
+    if not a['fecha_doc']:
+        casos.append({'titulo': 'Sin fecha de carga',
+                      'texto': f'No se ha podido leer la fecha de carga y se ha guardado en el mes en que se escaneó '
+                               f'({a["creado"][5:7]}/{a["creado"][:4]}).',
+                      'si_no': 'Si el mes no es el bueno, pon la fecha en «Corregir».'})
+    return casos
+
+
+@app.route('/albaran/<int:aid>/visto', methods=['POST'])
+@requiere_acceso
+def albaran_visto(aid):
+    """«Está bien así»: sale de «Para mirar» y pasa a los bien colocados."""
+    with db() as con:
+        con.execute('UPDATE albaranes SET visto=1 WHERE id=?', (aid,))
+        a = con.execute('SELECT numero FROM albaranes WHERE id=?', (aid,)).fetchone()
+    flash(f'✓ {a["numero"] if a else "Albarán"}: visto y bien. Pasa a los bien colocados.')
+    return redirect(url_for('revision'))
 
 
 def destino_texto(a) -> str:

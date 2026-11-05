@@ -149,10 +149,10 @@ details.bien[open]>summary{margin-bottom:.8rem}
 <div class="carpeta dudas">
   <div class="carpeta-cab">
     <span class="ruta">👀 Para mirar una vez</span>
-    <span class="destino">la app los ha colocado sola, pero son casos raros (recogidas, dos versiones, sin fecha). Si está bien, no hay que hacer nada; si no, cuéntaselo en «Corregir» y elige si vale solo para este o para siempre</span>
+    <span class="destino">la app los ha colocado sola, pero son casos poco normales. Léelo una vez: si está bien, «Está bien así»; si no, cuéntaselo en «Corregir»</span>
   </div>
-  <div class="rejilla">
-  {% for a in mirar %}{% with mostrar_carpeta=True %}{% include '_tarjeta.html' %}{% endwith %}{% endfor %}
+  <div class="casos">
+  {% for m in mirar %}{% include '_caso.html' %}{% endfor %}
   </div>
 </div>
 {% endif %}
